@@ -62,6 +62,102 @@ def test_classify_no_hit_defaults_to_long_doc():
     assert conf == 0.0 and hits == []
 
 
+def test_negation_guard_blocks_negated_keyword():
+    # The exact misroute from live use: "not usually hard math though" must
+    # not count as a math hit.
+    lane, conf, hits = tools.classify(
+        "an agent that helps me manage life, writing, and researchy tasks. "
+        "not usually hard math though.")
+    assert "math" not in [h for h in hits]
+    assert lane["id"] != "math-first-principles" or conf == 0.0
+
+
+def test_negation_guard_keeps_positive_hits():
+    lane, conf, hits = tools.classify("prove the theorem, give a derivation and a lemma")
+    assert lane["id"] == "math-first-principles"
+
+
+# --------------------------------------------------- route_for + LLM fallback
+
+class FakeLlm:
+    """Stands in for ctx.llm; returns a fixed lane or raises."""
+
+    def __init__(self, lane_id="orchestration", confidence=0.9):
+        self.lane_id = lane_id
+        self.confidence = confidence
+        self.calls = 0
+
+    def complete_structured(self, **kwargs):
+        self.calls += 1
+        if self.lane_id == "raise":
+            raise RuntimeError("no trust")
+        import types
+        return types.SimpleNamespace(
+            parsed={"lane": self.lane_id, "confidence": self.confidence})
+
+
+def test_route_for_strong_rules_skip_llm():
+    lane, conf, hits, method = tools.route_for(
+        "fix the NaN loss in our GRPO run, loss curve spikes at 2k steps")
+    assert method == "rules-strong"
+    assert lane["id"] == "dl-ml-research-engineering"
+
+
+def test_route_for_llm_fallback_on_paraphrase():
+    # Zero keyword signal ("researchy" is not a keyword); LLM decides.
+    fake = FakeLlm("orchestration", 0.9)
+    monkey_llm = tools.set_llm_facade(fake)
+    try:
+        lane, conf, hits, method = tools.route_for(
+            "an agent that helps me manage life, writing, and researchy tasks")
+        assert method == "llm"
+        assert lane["id"] == "orchestration"
+        assert fake.calls == 1
+    finally:
+        tools.set_llm_facade(monkey_llm)
+
+
+def test_route_for_llm_fallback_on_single_ambiguous_hit():
+    # One hit ("proof" of concept) only -> weak -> LLM takes over.
+    fake = FakeLlm("routine-coding", 0.8)
+    monkey_llm = tools.set_llm_facade(fake)
+    try:
+        lane, conf, hits, method = tools.route_for("a proof of concept for the dashboard")
+        assert method == "llm"
+        assert lane["id"] == "routine-coding"
+    finally:
+        tools.set_llm_facade(monkey_llm)
+
+
+def test_route_for_llm_failure_falls_back_to_weak_rules():
+    # Single weak hit, LLM facade raises -> rules-weak result stands.
+    fake = FakeLlm("raise")
+    monkey_llm = tools.set_llm_facade(fake)
+    try:
+        lane, conf, hits, method = tools.route_for("a proof of concept for the dashboard")
+        assert method == "rules-weak"
+        assert lane["id"] == "math-first-principles"  # 'proof' hit, weak but standing
+    finally:
+        tools.set_llm_facade(monkey_llm)
+
+
+def test_route_for_no_llm_configured_uses_weak_rules():
+    assert tools._PLUGIN_LLM is None  # not stashed outside register()
+    lane, conf, hits, method = tools.route_for("a proof of concept for the dashboard")
+    assert method in ("rules-weak", "default")
+
+
+def test_route_for_llm_unknown_lane_rejected():
+    # LLM returns a lane id not in the table -> treat as failure -> rules stand.
+    fake = FakeLlm("nonexistent-lane", 0.9)
+    monkey_llm = tools.set_llm_facade(fake)
+    try:
+        lane, conf, hits, method = tools.route_for("a proof of concept for the dashboard")
+        assert method == "rules-weak"
+    finally:
+        tools.set_llm_facade(monkey_llm)
+
+
 def test_classify_math_beats_prose_on_dual_signal():
     # "proof" (math) co-occurs with "blog post" (prose); math wins on stronger signal.
     lane, _, _ = tools.classify("write a blog post with a full proof of the theorem")

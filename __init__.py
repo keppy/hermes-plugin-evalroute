@@ -18,9 +18,11 @@ from pathlib import Path
 
 try:
     from . import schemas, tools
+    from . import sniff as _sniff
 except ImportError:  # pragma: no cover - pytest imports the plugin root as a top-level module
     import schemas  # type: ignore
     import tools  # type: ignore
+    import sniff as _sniff  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +30,15 @@ _SKILLS_DIR = Path(__file__).parent / "skills"
 
 
 def register(ctx):
-    """Wire the tool, the slash command, the CLI command, and the skill."""
+    """Wire the tool, the sniff hook, the slash command, the CLI command, and the skill."""
     ctx.register_tool(
         name="evalroute_route",
         toolset="evalroute",
         schema=schemas.EVALROUTE_ROUTE,
         handler=tools.evalroute_route,
     )
+
+    ctx.register_hook("pre_llm_call", _sniff.sniff)
 
     ctx.register_command(
         "route",
@@ -56,3 +60,8 @@ def register(ctx):
             skill_md = child / "SKILL.md"
             if child.is_dir() and skill_md.exists():
                 ctx.register_skill(child.name, skill_md)
+
+    # Host-owned LLM facade for the weak-signal classifier fallback
+    # (ctx.llm.complete_structured). Works under the default trust policy:
+    # no provider/model/task overrides. Stash; None disables the fallback.
+    tools.set_llm_facade(getattr(ctx, "llm", None))

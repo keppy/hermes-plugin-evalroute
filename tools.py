@@ -10,11 +10,14 @@ the terminal; see the bundled skill).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 ROUTES_FILE = PLUGIN_DIR / "data" / "routes.yaml"
@@ -51,18 +54,140 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
+_PLUGIN_LLM = None  # stashed ctx.llm facade, set at register() time
+
+
+def set_llm_facade(facade) -> None:
+    """Stash the host-owned LLM facade from register(ctx). None = no fallback."""
+    global _PLUGIN_LLM
+    _PLUGIN_LLM = facade
+
+
+# Negation cues: a keyword hit preceded by one of these within a few words is
+# not evidence for the lane. "not usually hard math though" must NOT count as
+# a math hit — this exact phrasing shipped a life-assistant description to the
+# math-first-principles route.
+_NEGATION_CUES = {
+    "not", "no", "never", "without", "except", "isn't", "isnt", "aren't", "arent",
+    "don't", "dont", "doesn't", "doesnt", "avoid", "rarely", "seldom", "hardly",
+    "unusual", "instead", "rather", "n't",
+}
+_NEG_WINDOW = 4  # words before the keyword to scan for a cue
+
+
 def _hit(keyword: str, text: str) -> bool:
-    """Word-boundary match of a normalized keyword in normalized text.
+    """Word-boundary, negation-guarded match of a normalized keyword.
 
     Substring matching made 'rl' hit 'world'; boundaries kill that class of
-    false positive while still matching multi-word phrases ('unit test').
+    false positive. Negation guard kills 'not usually hard math' as a math
+    signal. Multi-word phrases match as phrases ('unit test').
     """
     kw = _norm(keyword)
-    return bool(kw) and re.search(rf"(?:^| ){re.escape(kw)}(?: |$)", text) is not None
+    if not kw:
+        return False
+    m = re.search(rf"(?:^| )({re.escape(kw)})(?: |$)", text)
+    if m is None:
+        return False
+    # Words before the hit, up to the negation window.
+    before = text[:m.start()].split()
+    if any(w in _NEGATION_CUES for w in before[-_NEG_WINDOW:]):
+        return False
+    return True
 
 
 def _lane_by_id(lane_id: str) -> dict[str, Any] | None:
     return next((l for l in _load_routes() if l["id"] == lane_id), None)
+
+
+# Thresholds for escalating from rules to the host-owned LLM classifier.
+# HIGH_CONF = rules are trusted outright. BELOW that, a lane with several
+# distinct keyword hits is still trusted (evidence beats paraphrase); a single
+# hit is not — that's where "researchy" descriptions with zero vocab signal
+# lived, and where "not usually hard math" misrouted before the negation
+# guard.
+_LLM_HIGH_CONF = 0.75
+_LLM_MIN_HITS = 2
+
+_LLM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "lane": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["lane"],
+}
+
+_LLM_SYSTEM = (
+    "You are a task router. Classify the user's task description into exactly "
+    "one lane from the provided list. Judge by what the work IS, not by which "
+    "words appear: a description of an assistant's duties is an ORCHESTRATION "
+    "task (it plans and delegates); negated capabilities ('not usually hard "
+    "math') are evidence AGAINST a lane, not for it. Return JSON: "
+    '{"lane": "<id>", "confidence": 0-1}.'
+)
+
+
+def _llm_fallback(task: str, lanes: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, float]:
+    """Classify via the host-owned LLM facade (ctx.llm). Returns (lane, conf).
+
+    Failures (no facade, LLM error, unparseable/unknown lane) return (None, 0)
+    and the caller falls through to the deterministic result.
+    """
+    if _PLUGIN_LLM is None:
+        return None, 0.0
+    try:
+        lane_list = "\n".join(
+            f'- {l["id"]}: {l["label"]} — {l.get("match_hint", "")}' for l in lanes)
+        instructions = (
+            "Classify this task description into exactly one lane.\n\n"
+            f"Lanes:\n{lane_list}\n\nTask:\n{task}"
+        )
+        result = _PLUGIN_LLM.complete_structured(
+            instructions=instructions,
+            input=[{"type": "text", "text": task}],
+            json_schema=_LLM_SCHEMA,
+            schema_name="evalroute_lane",
+            system_prompt=_LLM_SYSTEM,
+            temperature=0.0,
+            max_tokens=256,
+            timeout=30.0,
+        )
+        parsed = getattr(result, "parsed", None) or {}
+        lane_id = str(parsed.get("lane", "")).strip()
+        conf = float(parsed.get("confidence", 0.0) or 0.0)
+        lane = _lane_by_id(lane_id)
+        if lane is None or conf <= 0:
+            return None, 0.0
+        return lane, min(1.0, conf)
+    except Exception as exc:
+        logger.warning("evalroute LLM fallback failed: %s", exc)
+        return None, 0.0
+
+
+def route_for(task: str) -> tuple[dict[str, Any], float, list[str], str]:
+    """Full routing decision: rules first, LLM fallback when rules are weak.
+
+    Returns (lane, confidence, hits, method) where method is
+    'rules-strong' | 'rules-weak' | 'llm' | 'default'. Rules are trusted only
+    with >= _LLM_MIN_HITS DISTINCT keyword hits on the winning lane (a lone
+    'proof' in 'proof of concept' is not evidence); confidence alone is not
+    a strength signal (1 hit on 1 lane computes conf 1.0). Otherwise the
+    host-owned LLM classifies (a paraphrase like 'manage life, writing, and
+    researchy tasks' has zero keyword signal and needs it). LLM failure falls
+    back to the weak rules result anyway.
+    """
+    lanes = _load_routes()
+    lane, conf, hits = classify(task)
+    distinct = len(set(hits))
+    if distinct >= _LLM_MIN_HITS:
+        return lane, conf, hits, "rules-strong"
+    # Rules are weak: paraphrase, or a single ambiguous hit. Escalate.
+    llm_lane, llm_conf = _llm_fallback(task, lanes)
+    if llm_lane is not None:
+        return llm_lane, llm_conf, hits, "llm"
+    if hits:
+        return lane, conf, hits, "rules-weak"
+    return lane, conf, hits, "default"
 
 
 def classify(task: str) -> tuple[dict[str, Any], float, list[str]]:
@@ -81,7 +206,11 @@ def classify(task: str) -> tuple[dict[str, Any], float, list[str]]:
         if hits:
             scores[lane["id"]] = hits
     if not scores:
-        return _lane_by_id("long-doc-reading"), 0.0, []
+        # Input-heavy default; a generated table may not contain that lane
+        # (no keywords carried over), so fall back to the first lane rather
+        # than returning None.
+        fallback = _lane_by_id("long-doc-reading") or _load_routes()[0]
+        return fallback, 0.0, []
     top_id = max(scores, key=lambda k: len(scores[k]))
     total = sum(len(h) for h in scores.values())
     conf = min(1.0, len(scores[top_id]) / total) if total else 0.0
@@ -89,7 +218,7 @@ def classify(task: str) -> tuple[dict[str, Any], float, list[str]]:
 
 
 def route_card(lane: dict[str, Any], conf: float, hits: list[str],
-               pinned: bool = False) -> str:
+               pinned: bool = False, method: str = "rules") -> str:
     """Render the human-readable route card."""
     lines = [
         f"lane: {lane['label']} ({lane['id']})",
@@ -99,6 +228,9 @@ def route_card(lane: dict[str, Any], conf: float, hits: list[str],
         lines.append(f"escalation: {lane['escalation']} (when coverage gaps or the task turns out harder)")
     if pinned:
         lines.append("classification: lane pinned by caller")
+    elif method == "llm":
+        lines.append(f"classification: LLM fallback ({conf:.2f}) - rules had weak signal "
+                     f"({'no keyword hit' if not hits else 'single ambiguous hit'})")
     elif hits:
         shown = ", ".join(sorted(set(hits))[:4])
         more = "" if len(set(hits)) <= 4 else f" (+{len(set(hits)) - 4} more)"
@@ -113,7 +245,8 @@ def route_card(lane: dict[str, Any], conf: float, hits: list[str],
     return "\n".join(lines)
 
 
-def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool) -> str:
+def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool,
+                 method: str = "rules") -> str:
     """JSON envelope for the model-facing tool: card for the human, fields for the agent."""
     return json.dumps({
         "lane": lane["id"],
@@ -122,6 +255,7 @@ def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool) -> 
         "effort": lane["effort"],
         "escalation": lane.get("escalation"),
         "confidence": round(conf, 2),
+        "classification_method": method,
         "pinned": pinned,
         "provenance": lane.get("provenance", ""),
         "card": card,
@@ -141,9 +275,10 @@ def evalroute_route(args: dict[str, Any], **_) -> str:
                 known = ", ".join(l["id"] for l in _load_routes())
                 return json.dumps({"error": f"unknown lane {lane_id!r}; known lanes: {known}"})
             card = route_card(lane, 1.0, [], pinned=True)
-            return _tool_result(card, lane, 1.0, pinned=True)
-        lane, conf, hits = classify(task)
-        return _tool_result(route_card(lane, conf, hits), lane, conf, pinned=False)
+            return _tool_result(card, lane, 1.0, pinned=True, method="pinned")
+        lane, conf, hits, method = route_for(task)
+        return _tool_result(route_card(lane, conf, hits, method=method), lane, conf,
+                            pinned=False, method=method)
     except Exception as exc:  # route table broken -> actionable error, not a crash
         return json.dumps({"error": f"evalroute: {exc}"})
 
@@ -165,8 +300,8 @@ def _card_for_args(raw_args: str) -> str:
     if lane_id:
         known = ", ".join(l["id"] for l in _load_routes())
         raise ValueError(f"unknown lane {lane_id!r}; known lanes: {known}")
-    lane_obj, conf, hits = classify(task)
-    return route_card(lane_obj, conf, hits)
+    lane_obj, conf, hits, method = route_for(task)
+    return route_card(lane_obj, conf, hits, method=method)
 
 
 def handle_route_command(raw_args: str) -> str:

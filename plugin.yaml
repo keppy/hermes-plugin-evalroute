@@ -12,4 +12,5 @@ homepage: https://github.com/keppy/hermes-plugin-evalroute
 tags: [evals, model-routing, reasoning-effort, cost-per-success]
 provides_tools:
   - evalroute_route
-provides_hooks: []
+provides_hooks:
+  - pre_llm_call

@@ -1,0 +1,76 @@
+"""Tier 2: first-turn sniff — advisory mismatch detection via pre_llm_call.
+
+Fires once per turn; we only act on the FIRST turn of a session. Classifies
+the user's opening message into a lane and compares the lane's route model
+against the model actually running. On a high-confidence mismatch, injects a
+single line asking the agent to mention `/route` at the top of its reply.
+
+Design rules (from the phase-1 design conversation):
+- Advisory ONLY. Never rewrites, never blocks, never switches models.
+- Rules-first classifier, same one as the tool — no LLM call, no cost.
+- Silent unless confident: fires only when (a) the classifier scored at
+  least MIN_HITS keyword hits, and (b) the routed model differs from the
+  active model.
+- Never fires on subagents or gateway platforms where the user may have
+  already routed deliberately; CLI/desktop only by default.
+"""
+
+from __future__ import annotations
+
+import logging
+
+try:
+    from . import tools
+except ImportError:  # pragma: no cover - pytest imports the plugin root as a top-level module
+    import tools  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+# Minimum keyword hits before the sniff will speak up. One hit = ambiguous
+# ("test" is in almost anything); two+ = the lane is probably real.
+MIN_HITS = 2
+
+# Platforms where the sniff is active. The mismatch advice is for interactive
+# sessions where the user can still act on it cheaply.
+_PLATFORMS = {"cli", "tui", "desktop"}
+
+
+def sniff(session_id: str, user_message, is_first_turn: bool, model: str,
+          platform: str, **kwargs):
+    """pre_llm_call callback: one advisory line on first-turn model mismatch."""
+    if not is_first_turn or not model:
+        return None
+    if (platform or "").lower() not in _PLATFORMS:
+        return None
+    # Multimodal turns arrive as a list of parts; take the text.
+    if isinstance(user_message, list):
+        user_message = " ".join(
+            part.get("text", "") for part in user_message
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    if not isinstance(user_message, str) or not user_message.strip():
+        return None
+    try:
+        lane, conf, hits = tools.classify(user_message)
+    except Exception:
+        return None  # a broken route table must never break the turn
+    if len(hits) < MIN_HITS:
+        return None
+    routed = lane.get("model") or ""
+    if not routed or _same_model(routed, model):
+        return None
+    return {"context": (
+        f"[evalroute] This looks like {lane['label']} work; the route table's "
+        f"pick is {routed} @ {lane.get('effort', 'medium')} but this session is "
+        f"running {model}. If the user has not chosen deliberately, mention "
+        f"`/route {user_message.strip()[:120]}` at the top of your reply so they "
+        f"can switch before work begins. Advisory only - do not block or delay "
+        f"the task."
+    )}
+
+
+def _same_model(routed: str, active: str) -> bool:
+    """Loose equality: bare slugs match prefixed ids (`glm-5.3` == `z-ai/glm-5.3`)."""
+    r = routed.lower().strip().split("/")[-1]
+    a = active.lower().strip().split("/")[-1]
+    return r == a
