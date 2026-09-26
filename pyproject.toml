@@ -1,0 +1,29 @@
+# Hermes reads [project].dependencies from this file and installs them into its
+# own venv. evalroute's route table is hand-edited YAML; pyyaml is the only
+# dependency and it is already part of the Hermes venv (manifest parsing).
+# There is no runner, no network access, and no paid path in this plugin:
+# every command is local file math over data/routes.yaml.
+
+[project]
+name = "hermes-plugin-evalroute"
+version = "0.1.0"
+description = "Hermes plugin: route tasks to the right (model, reasoning effort) arm, from a measured cost-per-verified-success table."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "James Dominguez" }]
+keywords = ["hermes", "plugin", "model-routing", "evals", "reasoning-effort"]
+
+dependencies = [
+  "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/keppy/hermes-plugin-evalroute"
+Source = "https://github.com/keppy/hermes-plugin-evalroute"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

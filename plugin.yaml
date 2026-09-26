@@ -1,0 +1,15 @@
+name: evalroute
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: >-
+  Route a task to the right (model, effort) arm before you start. Classifies
+  the task into a lane, returns a route card with provenance, and installs
+  per-model reasoning-effort defaults so /model carries the lane's effort.
+author: James Dominguez (keppy)
+license: MIT
+homepage: https://github.com/keppy/hermes-plugin-evalroute
+tags: [evals, model-routing, reasoning-effort, cost-per-success]
+provides_tools:
+  - evalroute_route
+provides_hooks: []
