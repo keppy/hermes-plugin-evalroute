@@ -126,5 +126,38 @@ the executable (tests use this to point at a fake — no real runs).
 
 - Real evalroute runs feeding `routes_from_report` — replace priors with
   measured provenance, lane by lane.
+- A month of flywheel labels (`/route` + `/rate` in daily use) deciding which
+  controlled batch to buy first — observational data prioritizes, the harness
+  measures.
 - Gonogo/thomas integration: lane as a field on the Case shape, so
   intake → lane → route → (model, effort) arm closes the loop.
+
+## Flywheel: labels from daily workflow (v0.2.0)
+
+The controlled harness is not the only source of data. As you use `/route`
+in daily sessions, the plugin quietly builds an observational dataset:
+
+- **`/route`** logs the assignment (lane, recommended arm, method, confidence)
+  to `<hermes home>/evalroute/labels.jsonl` — the task text you typed is the label.
+- **`/model` or `/reasoning` after a route** logs an implicit verdict
+  (switching to a different model than the card recommended is recorded as a
+  route rejection — no effort required from you).
+- **`/rate pass|fail [--lane <id>] [--note ...]`** labels the outcome when you
+  finish a routed task. `--lane` files a lane correction (the classifier's
+  favorite food); `skip` discards the pending route. One word is the whole cost.
+- Nothing else is recorded: no response bodies, no conversation content, no turn
+  telemetry. The last-seen model is kept in memory only, for `/rate` correlation.
+
+**Turning labels into route data:** `python routes_from_labels.py` prints
+per-lane, per-arm pass rates and corrections; `--apply` writes
+`data/routes.observed.yaml`. Observed rows carry honest, weaker provenance:
+
+```
+observed 23 tasks, single-arm, pass 78%, 2026-10-30
+```
+
+and only where the lane has no `measured` row — observational data can contest
+a priors row, never overwrite a measured one. The one strong signal that flips
+a recommended arm: the routed arm failing 2+ times while an escalation-tier
+model passed. Everything else informs; only the harness's k-sample batches
+make rows gold.

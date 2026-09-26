@@ -19,10 +19,12 @@ from pathlib import Path
 try:
     from . import schemas, tools
     from . import sniff as _sniff
+    from . import flywheel as _flywheel
 except ImportError:  # pragma: no cover - pytest imports the plugin root as a top-level module
     import schemas  # type: ignore
     import tools  # type: ignore
     import sniff as _sniff  # type: ignore
+    import flywheel as _flywheel  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,19 @@ def register(ctx):
     )
 
     ctx.register_hook("pre_llm_call", _sniff.sniff)
+
+    # Flywheel: label routes/outcomes as part of daily workflow. pre_command
+    # (/model, /reasoning after a route) and post_llm_call (last-seen model)
+    # are observers; /rate is the explicit outcome label.
+    ctx.register_hook("pre_command", _flywheel.on_pre_command)
+    ctx.register_hook("post_llm_call", _flywheel.on_post_llm_call)
+
+    ctx.register_command(
+        "rate",
+        handler=_flywheel.handle_rate,
+        description="Label the last routed task pass|fail (feeds the observed route table)",
+        args_hint="pass|fail [--lane <lane-id>] [--note <text>]",
+    )
 
     ctx.register_command(
         "route",

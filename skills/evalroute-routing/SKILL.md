@@ -38,6 +38,12 @@ reasoning off).
 6. **When the user's task is ambiguous** (no keyword hit), the card defaults
    to long-doc-reading with confidence 0.0 and says so. Ask for one more
    sentence about what the work involves, or pin with `--lane`.
+7. **Label outcomes with `/rate`.** After a routed task finishes, run
+   `/rate pass` or `/rate fail` (add `--lane <id>` if the route's lane was
+   wrong; `--note` for context). One word, optional correction. This feeds
+   the observed-provenance table — the flywheel that decides which controlled
+   batch to buy. If the user narrates a verdict ("that worked", "that was
+   garbage"), suggest they run /rate (or offer to run it for them).
 
 ## Updating the table
 

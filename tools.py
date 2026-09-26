@@ -277,6 +277,11 @@ def evalroute_route(args: dict[str, Any], **_) -> str:
             card = route_card(lane, 1.0, [], pinned=True)
             return _tool_result(card, lane, 1.0, pinned=True, method="pinned")
         lane, conf, hits, method = route_for(task)
+        try:  # flywheel label; logging must never break the card
+            from . import flywheel as _fw
+            _fw.note_route(task, lane, method, conf)
+        except Exception:
+            pass
         return _tool_result(route_card(lane, conf, hits, method=method), lane, conf,
                             pinned=False, method=method)
     except Exception as exc:  # route table broken -> actionable error, not a crash
@@ -301,6 +306,11 @@ def _card_for_args(raw_args: str) -> str:
         known = ", ".join(l["id"] for l in _load_routes())
         raise ValueError(f"unknown lane {lane_id!r}; known lanes: {known}")
     lane_obj, conf, hits, method = route_for(task)
+    try:  # flywheel label; logging must never break the card
+        from . import flywheel as _fw
+        _fw.note_route(task, lane_obj, method, conf)
+    except Exception:
+        pass
     return route_card(lane_obj, conf, hits, method=method)
 
 
