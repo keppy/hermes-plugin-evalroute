@@ -9,6 +9,7 @@ the terminal; see the bundled skill).
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import re
@@ -315,7 +316,26 @@ def route_card(lane: dict[str, Any], conf: float, hits: list[str],
     if lane.get("notes"):
         lines.append(f"note: {lane['notes']}")
     lines.append(f"why here: {lane.get('match_hint', '')}")
+    # Workflow footer: the card answers "what arm?", the footer answers
+    # "what now?". Wrong lane -> fix it now (a --lane reroute re-logs the
+    # assignment; /rate attributes to the LAST route on file).
+    lines.append(f"next: /model {lane['model']}"
+                 + (" then /reasoning " + lane["effort"] if not _effort_auto() else "")
+                 + " | wrong lane? /route --lane <id> <same task>"
+                 " | when done: /rate pass|fail --note why")
     return "\n".join(lines)
+
+
+def _effort_auto() -> bool:
+    """True when install-routes wrote per-model efforts (so the card can
+    skip the /reasoning step). Best-effort: checks the live config."""
+    try:
+        import hermes_constants  # noqa: F401  (available inside the host)
+        _ro = (Path.home() / "AppData" / "Local" / "hermes" / "config.yaml")
+        text = _ro.read_text(encoding="utf-8")
+        return "reasoning_overrides" in text
+    except Exception:
+        return False
 
 
 def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool,
@@ -480,12 +500,37 @@ def install_routes(dry_run: bool = False) -> int:
     return 0
 
 
+_WORKFLOW_EPILOG = """\
+workflow (route -> arm -> rate, in the session that runs the task):
+  1. /route <task>            classify; prints the card (lane, model, effort)
+  2. /model <model>          set the arm from the card's "run:" line
+                             (/reasoning <effort> too, unless install-routes
+                             already wrote it into agent.reasoning_overrides)
+  3. do the task in that session
+  4. /rate pass|fail [--lane <lane-id>] [--note ...]
+                             label the outcome; --lane files a correction
+                             when the route got the lane wrong
+same flow from the terminal: hermes evalroute route "<task>" (step 1) and
+hermes evalroute rate pass --note ... (step 4); steps 2-3 are chat commands.
+routing data improves only when routes are rated: unrouted tasks cost the
+same as ever, unrated routes teach nothing."""
+
+
 def setup_cli(subparser) -> None:
     """argparse wiring for `hermes evalroute` (register_cli_command setup_fn)."""
     subs = subparser.add_subparsers(dest="evalroute_action")
-    route_p = subs.add_parser("route", help="Classify a task and print a route card")
+    route_p = subs.add_parser("route", help="Classify a task and print a route card",
+                              epilog=_WORKFLOW_EPILOG,
+                              formatter_class=argparse.RawDescriptionHelpFormatter)
     route_p.add_argument("task", nargs="*", help="The task description")
     route_p.add_argument("--lane", help="Pin a lane id instead of classifying")
+    rate_p = subs.add_parser("rate", help="Rate the last routed task: pass|fail",
+                             epilog=_WORKFLOW_EPILOG,
+                             formatter_class=argparse.RawDescriptionHelpFormatter)
+    rate_p.add_argument("verdict", nargs="?", choices=["pass", "fail", "skip"],
+                        help="pass | fail | skip")
+    rate_p.add_argument("--lane", help="File a lane correction (the lane it should have been)")
+    rate_p.add_argument("--note", help="Why — the highest-value part of the label")
     install_p = subs.add_parser("install-routes", help="Write the route table's effort "
                                    "column into agent.reasoning_overrides")
     install_p.add_argument("--dry-run", action="store_true", help="Show the diff, write nothing")
@@ -497,11 +542,23 @@ def evalroute_cli(args) -> int:
     action = getattr(args, "evalroute_action", None)
     if action == "install-routes":
         return install_routes(dry_run=bool(getattr(args, "dry_run", False)))
+    if action == "rate":
+        try:
+            from . import flywheel as _fw
+        except ImportError:
+            import flywheel as _fw  # type: ignore
+        parts = [getattr(args, "verdict", None) or ""]
+        if getattr(args, "lane", None):
+            parts.append(f"--lane {args.lane}")
+        if getattr(args, "note", None):
+            parts.append(f"--note {args.note}")
+        print(_fw.handle_rate(" ".join(parts)))
+        return 0
     if action == "route":
         task = " ".join(getattr(args, "task", []) or [])
         lane = getattr(args, "lane", None)
         if not task and not lane:
-            print("usage: hermes evalroute route [--lane <lane-id>] <task>")
+            print(_WORKFLOW_EPILOG)
             return 2
         try:
             if lane:
@@ -512,5 +569,5 @@ def evalroute_cli(args) -> int:
             print(f"evalroute: {exc}")
             return 1
         return 0
-    print("usage: hermes evalroute {route|install-routes}")
+    print(_WORKFLOW_EPILOG)
     return 2
