@@ -1,9 +1,10 @@
 # hermes-plugin-evalroute
 
 Route a task to the right **(model, reasoning effort) arm** before you start.
-A Hermes plugin wrapping the [evalroute](https://github.com/keppy/evalroute)
-procedure: pick the lane, pick the model, pick the effort — as data, with
-provenance on every row.
+Built around the evalroute procedure — a one-file harness that measures
+**cost per verified success** per task lane — this plugin turns its
+output into a route table with provenance on every row: pick the lane,
+pick the model, pick the effort, as data.
 
 - `/route <task>` — classify a task into a lane, get a route card (model,
   effort, escalation, provenance) before the first turn. Works in CLI,
@@ -184,6 +185,13 @@ the executable (tests use this to point at a fake — no real runs).
   (routine-coding, dl-ml, alignment — 2026-09-27, ~$5); each needs a
   10-task set with checkers that discriminate (pre-spend validation
   against a reference solution catches broken fixtures before paid runs).
+- **Theory stretch — classifier fine-tune.** Train a lane classifier with
+  the thomas training harness, fed by flywheel labels (task text → lane,
+  plus the `--lane` corrections). LLM fallback becomes the last resort;
+  different kinds of users could run different locally-finetuned
+  classifiers. Needs a hand-checked experiment first (label volume,
+  class balance, per-user vs. global training) before any training spend.
+  Not scheduled until the flywheel has enough labels to train on.
 - **Live:** the flywheel (`/route` + `/rate` in daily use, plus implicit
   verdicts from `/model` and `/reasoning` switches). First human-rated
   outcome recorded 2026-09-27. Labels snapshots publish with this repo
