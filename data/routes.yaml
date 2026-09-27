@@ -1,10 +1,34 @@
 version: 1
 lanes:
+- id: alignment-reasoning
+  label: Alignment reasoning, paper claims
+  model: z-ai/glm-5.3
+  effort: medium
+  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0119/succ, 2026-09-27; gap vs
+    runner-up: 100.0% vs 100.0% (+0.0% [+0.0%, +0.0%], p=1.000) — not distinguishable
+    on 10 shared cases'
+  keywords:
+  - alignment
+  - reward hacking
+  - goodhart
+  - sycophancy
+  - mesa-optimization
+  - mesaoptimization
+  - outer alignment
+  - inner alignment
+  - interpretability
+  - paper claim
+  - rlhf
+  - rlaif
+  - constitutional
+  match_hint: reasoning about failure modes and paper claims
 - id: routine-coding
   label: Routine coding
   model: z-ai/glm-5.3-flash
   effort: medium
-  provenance: measured 10 tasks, cov 1.0, all-in $0.0001/succ, 2026-09-27
+  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0001/succ, 2026-09-27; gap vs
+    runner-up: 100.0% vs 100.0% (+0.0% [+0.0%, +0.0%], p=1.000) — not distinguishable
+    on 10 shared cases'
   keywords:
   - refactor
   - lint
@@ -28,31 +52,13 @@ lanes:
   notes: verbose already; tests catch misses cheaply, so retries beat deep thinking;
     ds-v4.1-flash@medium had pass^k 1.00 at same price - prefer it when determinism
     matters (measured note)
-- id: alignment-reasoning
-  label: Alignment reasoning, paper claims
-  model: z-ai/glm-5.3
-  effort: medium
-  provenance: measured 10 tasks, cov 1.0, all-in $0.0119/succ, 2026-09-26
-  keywords:
-  - alignment
-  - reward hacking
-  - goodhart
-  - sycophancy
-  - mesa-optimization
-  - mesaoptimization
-  - outer alignment
-  - inner alignment
-  - interpretability
-  - paper claim
-  - rlhf
-  - rlaif
-  - constitutional
-  match_hint: reasoning about failure modes and paper claims
 - id: dl-ml-research-engineering
   label: DL / ML research engineering
   model: z-ai/glm-5.3
   effort: high
-  provenance: measured 10 tasks, cov 1.0, all-in $0.0024/succ, 2026-09-26
+  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0024/succ, 2026-09-27; gap vs
+    runner-up: 100.0% vs 100.0% (+0.0% [+0.0%, +0.0%], p=1.000) — not distinguishable
+    on 10 shared cases'
   keywords:
   - training run
   - fine-tune

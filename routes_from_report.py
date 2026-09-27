@@ -127,7 +127,8 @@ def load_report(csv_path: Path) -> dict[str, dict]:
 
 
 def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
-             models_path: Path | None = None, k: int = 1) -> int:
+             models_path: Path | None = None, k: int = 1,
+             runs_path: Path | None = None) -> int:
     existing: dict[str, dict] = {}
     if existing_path and existing_path.exists():
         raw = yaml.safe_load(existing_path.read_text(encoding="utf-8")) or {}
@@ -138,6 +139,37 @@ def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
     if not winners:
         print("no routeable rows in CSV (all lanes failed or no data); nothing generated")
         return 1
+
+    # gonogo adjudication: winner vs runner-up per lane, from the raw runs.
+    stamps: dict[str, str] = {}
+    if runs_path and runs_path.exists():
+        import json
+        try:
+            from . import adjudicate
+        except ImportError:
+            import adjudicate  # type: ignore
+        runs = [json.loads(l) for l in runs_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        all_rows = list(csv.DictReader(open(csv_path, encoding="utf-8")))
+        by_lane: dict[str, list[dict]] = defaultdict(list)
+        for r in all_rows:
+            try:
+                r["cov_f"] = float(r["cov"]) if r["cov"] not in ("", "nan") else -1.0
+                r["allin_f"] = float(r["allin"]) if r["allin"] not in ("", "inf") else float("inf")
+            except (ValueError, KeyError):
+                continue
+            by_lane[r["lane"]].append(r)
+        for lane_name, lrows in by_lane.items():
+            lane_id = _slug(lane_name)
+            if lane_name not in winners:  # winners keyed by CSV lane name
+                continue
+            best_cov = max((r["cov_f"] for r in lrows if r["cov_f"] >= 0), default=-1.0)
+            elig = [r for r in lrows if r["cov_f"] >= best_cov - 1e-9 and r["allin_f"] < float("inf")]
+            if len(elig) < 2:
+                continue
+            runner = sorted(elig, key=lambda r: r["allin_f"])[1]
+            if runner["model"] != winners[lane_name]["model"]:
+                stamps[lane_id] = adjudicate.route_stamp(runs, winners[lane_name]["model"],
+                                                        runner["model"])
 
     date = datetime.date.today().isoformat()
     lanes_out: list[dict] = []
@@ -154,6 +186,8 @@ def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
         seen_ids.add(lane_id)
         model_id = model_ids.get(stats["model"], stats["model"])
         row = _route_row(lane_id, stats, date, model_id)
+        if lane_id in stamps:
+            row["provenance"] = f'{row["provenance"]}; {stamps[lane_id]}'
         prev = existing.get(lane_id) or {}
         for key in KEEP_FROM_EXISTING:
             if prev.get(key):
@@ -195,9 +229,13 @@ def main(argv=None) -> int:
                     help="models.json used by the run; maps arm names -> routable model ids")
     ap.add_argument("--k", type=int, default=1,
                     help="samples per task in the run; the CSV's n column counts samples, not tasks")
+    ap.add_argument("--runs", default=None,
+                    help="the run's runs.jsonl; enables gonogo adjudication of the "
+                         "winner vs runner-up (stamp appended to provenance)")
     a = ap.parse_args(argv)
     return generate(Path(a.csv), Path(a.out), Path(a.routes) if a.routes else None,
-                     Path(a.models) if a.models else None, a.k)
+                     Path(a.models) if a.models else None, a.k,
+                     Path(a.runs) if a.runs else None)
 
 
 if __name__ == "__main__":

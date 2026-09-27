@@ -87,6 +87,15 @@ def _observed_row(lane_id: str, stats: dict, prev: dict[str, Any], date: str) ->
     n = stats["outcomes"]
     pr = stats["pass_rate"]
     row["provenance"] = f"observed {n} tasks, single-arm, pass {pr:.0%}, {date}"
+    # gonogo decide(): the honest verdict on what n can support, when available.
+    try:
+        from . import adjudicate
+    except ImportError:
+        import adjudicate  # type: ignore
+    passes = sum(a["passes"] for a in stats["arms"].values())
+    verdict = adjudicate.observed_verdict(passes, n)
+    if verdict:
+        row["provenance"] = f'{row["provenance"]}; {verdict}'
     # Escalation flip: recommended arm failing while an escalation-tier model
     # passed is the one observational signal strong enough to move the route.
     prev_model = prev.get("model") if prev else None
