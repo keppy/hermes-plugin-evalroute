@@ -110,6 +110,21 @@ def _last_route() -> Optional[dict[str, Any]]:
     return None
 
 
+def pending_route_from_file() -> Optional[dict[str, Any]]:
+    """The most recent unrated route per the labels file, ignoring memory.
+
+    Used by the first-turn sniff to detect cross-session continuations: a
+    pending route with no in-memory counterpart was armed by another
+    process (a previous session, or the CLI) and is still open.
+    """
+    records = read_labels()
+    consumed = {r.get("consumes") for r in records if r.get("consumes")}
+    for rec in reversed(records):
+        if rec.get("kind") == "route" and rec.get("ts") not in consumed:
+            return rec
+    return None
+
+
 def _pending_label(route: Optional[dict[str, Any]]) -> str:
     """One-line summary of the row /rate just closed (or is about to).
 
