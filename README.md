@@ -2,9 +2,10 @@
 
 Route a task to the right **(model, reasoning effort) arm** before you start.
 Built around the evalroute procedure — a one-file harness that measures
-**cost per verified success** per task lane — this plugin turns its
-output into a route table with provenance on every row: pick the lane,
-pick the model, pick the effort, as data.
+**cost per verified success** per task lane (vendored at `harness/evalroute.py`
+so this repo is self-contained: measure, then serve the results) — this
+plugin turns its output into a route table with provenance on every row:
+pick the lane, pick the model, pick the effort, as data.
 
 - `/route <task>` — classify a task into a lane, get a route card (model,
   effort, escalation, provenance) before the first turn. Works in CLI,
@@ -129,14 +130,23 @@ kept as distinct lanes. Model ids must match `/model` spelling exactly.
 ### Regenerating from measured data
 
 ```bash
-python routes_from_report.py --csv report.csv   # output of evalroute.py report --csv
+# in the harness venv (openai + anthropic; it stays out of the Hermes venv)
+python harness/evalroute.py run -m models.json -t tasks.jsonl -k 3
+python harness/evalroute.py report -o runs.jsonl --csv report.csv
+python routes_from_report.py --csv report.csv --runs runs.jsonl
 ```
 
-Within each lane the generator applies the report's own routing rule
-(coverage-gated lowest all-in $/success), stamps `provenance: measured ...`,
-preserves each lane's `keywords`/`match_hint`/`escalation`/`notes` from the
-existing table, and carries unmeasured lanes over verbatim — regeneration
-never silently deletes a route.
+The harness is vendored so the loop is complete inside one repo: write
+tasksets (deterministic `python` checkers where possible — validate every
+checker against a reference solution before paid runs), run k samples per
+arm, report, then flip the lane's row. `routes_from_report.py` applies the
+report's own routing rule (coverage-gated lowest all-in $/success), stamps
+`provenance: measured ...` with a gonogo McNemar stamp when the winner and
+runner-up shared cases, preserves each lane's `keywords`/`match_hint`/
+`escalation`/`notes`, and carries unmeasured lanes over verbatim —
+regeneration never silently deletes a route. The tier-a tasksets and runs
+that produced the current measured lanes are under `examples/artifacts/`
+(sets: `tasks.jsonl`; raw run records: `runs.jsonl`).
 
 ## The Hermes shim (`api: "cmd"` arms)
 
@@ -172,9 +182,10 @@ the executable (tests use this to point at a fake — no real runs).
 - **Provenance is priors until you measure.** Several rows are explicitly
   untested/unmeasured/contested; the card prints the provenance verbatim so
   nobody mistakes a hypothesis for a result.
-- **The evalroute harness stays out of the Hermes venv.** Paid API cells run
-  in the harness's own environment (`EVALROUTE_PYTHON`) via the terminal;
-  this plugin only ships the shim and the route tooling.
+- **The evalroute harness stays out of the Hermes venv.** It's vendored at
+  `harness/evalroute.py` (run it in its own venv with `openai`/`anthropic`;
+  `EVALROUTE_PYTHON` points the plugin's runners at that interpreter).
+  This plugin itself requires nothing beyond `pyyaml`.
 - **The sniff hook is advisory only.** It speaks when the classifier is
   confident and the session's model disagrees with the lane's route; it
   never rewrites, blocks, or switches.
