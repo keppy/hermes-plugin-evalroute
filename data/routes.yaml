@@ -1,5 +1,33 @@
 version: 1
 lanes:
+- id: routine-coding
+  label: Routine coding
+  model: z-ai/glm-5.3-flash
+  effort: medium
+  provenance: measured 10 tasks, cov 1.0, all-in $0.0001/succ, 2026-09-27
+  keywords:
+  - refactor
+  - lint
+  - unit test
+  - unit-test
+  - test
+  - typo
+  - bugfix
+  - bug fix
+  - script
+  - rename
+  - cleanup
+  - format
+  - boilerplate
+  - stub
+  - scaffold
+  - small function
+  - helper
+  match_hint: everyday code changes where a test or compiler checks the result
+  escalation: gpt-6-luna
+  notes: verbose already; tests catch misses cheaply, so retries beat deep thinking;
+    ds-v4.1-flash@medium had pass^k 1.00 at same price - prefer it when determinism
+    matters (measured note)
 - id: alignment-reasoning
   label: Alignment reasoning, paper claims
   model: z-ai/glm-5.3
@@ -50,33 +78,6 @@ lanes:
   - colocate
   match_hint: training/eval harness engineering
   escalation: gpt-6-sol
-- id: routine-coding
-  label: Routine coding
-  keywords:
-  - refactor
-  - lint
-  - unit test
-  - unit-test
-  - test
-  - typo
-  - bugfix
-  - bug fix
-  - script
-  - rename
-  - cleanup
-  - format
-  - boilerplate
-  - stub
-  - scaffold
-  - small function
-  - helper
-  match_hint: everyday code changes where a test or compiler checks the result
-  model: z-ai/glm-5.3-flash
-  effort: medium
-  escalation: gpt-6-luna
-  provenance: priors 2026-09-26 (V4.1 Flash low-medium on evalroute README; GLM 5.3
-    Flash slotted by same table)
-  notes: verbose already; tests catch misses cheaply, so retries beat deep thinking
 - id: hard-agentic-coding
   label: Hard agentic coding
   keywords:
