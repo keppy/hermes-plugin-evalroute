@@ -1,7 +1,7 @@
 ---
 name: evalroute-routing
 description: Use when picking a model or reasoning effort for a task, or when asked which model to use.
-version: 0.2.0
+version: 0.2.1
 author: James Dominguez (keppy)
 license: MIT
 ---
@@ -64,6 +64,14 @@ The workflow above is the spine; these are the details that bite:
 - **If the user narrates a verdict** ("that worked", "that was garbage"),
   suggest `/rate` (or offer to run it for them). If they say the lane was
   wrong, reroute with `--lane` and rate in one flow.
+- **Session caps are continuations, not new routes.** If the user hits the
+  turn limit mid-task, tell them: stay in the session if possible
+  (`continue: <what remains>` — fresh budget, arm persists), else
+  `hermes -c`, else paste the final turn as the new session's opener. Never
+  re-route the continuation (it displaces the pending row); `/rate` once at
+  the end with the cross-session fact in the note. A different task in the
+  new session? `/rate skip` clears the pending row first. Steering is part
+  of the observed layer — the note carries the methodology, not the verdict.
 
 ## Updating the table
 

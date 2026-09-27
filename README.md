@@ -230,6 +230,27 @@ in daily sessions, the plugin quietly builds an observational dataset:
 - Nothing else is recorded: no response bodies, no conversation content, no turn
   telemetry. The last-seen model is kept in memory only, for `/rate` correlation.
 
+**Continuing across sessions (turn caps).** A task that outlives its session —
+the turn limit hits, the terminal closes mid-task — is a continuation, not a
+new route. The row being labeled is (task, arm), not (task, session):
+
+- Prefer staying in the session: `continue: <what remains>` gets a fresh
+  iteration budget, and the arm is session-scoped and persists.
+- Otherwise `hermes -c` continues the same conversation, or paste the capped
+  session's final turn as the new session's opener.
+- Never `/route` the continuation — a new route displaces the pending row. If
+  the new session is actually a different task, `/rate skip` clears the
+  pending one first.
+- Steer as much as you like. The observed layer is defined as
+  daily-workflow-with-a-human-in-the-loop; a directive continuation is normal
+  operation, and it matches a detailed original prompt better than a bare
+  "continue" — which quietly tests prompt-luck instead of the arm. Measured
+  rows are untouched: they come from fixed-prompt, fresh-context harness cells.
+- Put the methodology in the note: `--note "completed across two sessions
+  (turn cap), directive continuation"`. The label records neither cost nor
+  session boundaries, and a session-spanning pass re-reads the accumulated
+  context at full input price — the note is where that lives.
+
 **Turning labels into route data:** `python routes_from_labels.py` prints
 per-lane, per-arm pass rates, lane corrections, and facet conjunction
 outcomes; `--apply` writes `data/routes.observed.yaml`. Observed rows carry
