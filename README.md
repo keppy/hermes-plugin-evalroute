@@ -29,6 +29,34 @@ The route table ships as the **2026-09-26 priors snapshot** (public
 benchmarks, many vendor-run): replace rows with your own measured data as
 soon as you have it, and update each row's `provenance`.
 
+## What this changes for Hermes
+
+Hermes ships one default (model, effort) per user; every task pays the same
+arm regardless of shape. This plugin makes that a per-task decision, backed
+by three things a default can't have:
+
+- **Measured routes.** Three lanes measured with the evalroute harness
+  (10 tasks x 3 samples x 4 arms each, ~$5 total spend): routine coding,
+  DL/ML research engineering, alignment reasoning. Every winner was
+  statistically indistinguishable from its runner-up at n=10 (McNemar, via
+  gonogo) — the routes are cost decisions on tied arms, and the card says
+  so instead of implying a quality gap. Routine coding overturned the
+  priors' vendor pick: glm-5.3-flash at medium effort covered every task
+  at $0.00005/success, 2.4–3.9x cheaper than the V4.1 Flash arms at equal
+  coverage.
+- **Provenance states.** Every row is `priors`, `observed`, or `measured`.
+  Nothing hypothesis-shaped masquerades as a result — the card prints the
+  row's provenance verbatim, statistical stamp included.
+- **A flywheel.** Daily use labels itself: `/route` logs the assignment,
+  `/model` and `/reasoning` switches log accept/reject, `/rate pass|fail`
+  logs the outcome — with facets, so an audit of a long research plan is
+  `long-doc + domain-dlml + tier-hard`, not one collapsed label.
+
+The platform adoption path needs no core changes: a route table is data plus
+config writes (`agent.reasoning_overrides`), and the effort half of routing
+already ships in Hermes. A community-maintained measured table is this same
+plugin with better data in it.
+
 ## Classification: rules first, LLM when weak
 
 The classifier's first layer is deterministic keyword rules over
@@ -49,6 +77,34 @@ The card always prints which layer decided: `rules match`, `LLM fallback`,
 or `no keyword hit - defaulted`. If the LLM call fails (offline, trust
 denied), the weak rules result stands and the card says so. Pin manually
 with `/route --lane <id>` when you know better.
+
+## Facets: labels with dimensions
+
+A lane is the routing decision; facets are the label. Every route also
+captures the task's shape along three axes, defined in `data/facets.yaml`:
+
+- **input-shape**: `long-doc` | `interactive`
+- **domain**: `domain-dlml` | `domain-alignment` | `domain-math` | `domain-prose` | `domain-research`
+- **demand-tier**: `tier-routine` | `tier-hard` | `tier-orchestration`
+
+So "audit my RL training plan files" is recorded as `long-doc +
+domain-dlml + tier-hard` — three facts about one task — instead of one
+collapsed lane. The rules layer derives facets from keyword evidence
+(conservative: only lanes that drew hits claim facets); the LLM fallback
+names them semantically in the same structured call.
+
+When a task claims facets on multiple axes, the card states the
+conjunctive rule and the arm follows the most demanding facet — domain
+beats input-shape (judgment is the scarcer resource; bulk input is what
+flash-class models are for), tier beats both:
+
+```
+facets: long-doc + domain-dlml (conjunctive — domain drives the arm; input-shape rides along)
+```
+
+Facet conjunctions aggregate in `routes_from_labels.py`, so the
+high-dimensional nodes — "how do long-doc x dl-ml tasks fare on arm X?" —
+fill in from daily use without controlled-batch spend.
 
 ## Install
 
@@ -124,21 +180,28 @@ the executable (tests use this to point at a fake — no real runs).
 
 ## Roadmap
 
-- Real evalroute runs feeding `routes_from_report` — replace priors with
-  measured provenance, lane by lane.
-- A month of flywheel labels (`/route` + `/rate` in daily use) deciding which
-  controlled batch to buy first — observational data prioritizes, the harness
-  measures.
-- Gonogo/thomas integration: lane as a field on the Case shape, so
-  intake → lane → route → (model, effort) arm closes the loop.
+- **In progress:** flip the remaining 6 priors lanes to measured. Three done
+  (routine-coding, dl-ml, alignment — 2026-09-27, ~$5); each needs a
+  10-task set with checkers that discriminate (pre-spend validation
+  against a reference solution catches broken fixtures before paid runs).
+- **Live:** the flywheel (`/route` + `/rate` in daily use, plus implicit
+  verdicts from `/model` and `/reasoning` switches). First human-rated
+  outcome recorded 2026-09-27. Labels snapshots publish with this repo
+  (see below); a month of them decides which controlled batch to buy next —
+  observational data prioritizes, the harness measures.
+- Gonogo is wired (McNemar stamps on measured rows, decide() verdicts on
+  observed rows). Remaining: thomas integration — lane as a field on the
+  Case shape, so intake → lane → route → (model, effort) arm closes the
+  loop.
 
-## Flywheel: labels from daily workflow (v0.2.0)
+## Flywheel: labels from daily workflow
 
 The controlled harness is not the only source of data. As you use `/route`
 in daily sessions, the plugin quietly builds an observational dataset:
 
-- **`/route`** logs the assignment (lane, recommended arm, method, confidence)
-  to `<hermes home>/evalroute/labels.jsonl` — the task text you typed is the label.
+- **`/route`** logs the assignment (lane, recommended arm, method,
+  confidence, facets) to `<hermes home>/evalroute/labels.jsonl` — the
+  task text you typed is the label.
 - **`/model` or `/reasoning` after a route** logs an implicit verdict
   (switching to a different model than the card recommended is recorded as a
   route rejection — no effort required from you).
@@ -149,15 +212,26 @@ in daily sessions, the plugin quietly builds an observational dataset:
   telemetry. The last-seen model is kept in memory only, for `/rate` correlation.
 
 **Turning labels into route data:** `python routes_from_labels.py` prints
-per-lane, per-arm pass rates and corrections; `--apply` writes
-`data/routes.observed.yaml`. Observed rows carry honest, weaker provenance:
+per-lane, per-arm pass rates, lane corrections, and facet conjunction
+outcomes; `--apply` writes `data/routes.observed.yaml`. Observed rows carry
+honest, weaker provenance:
 
 ```
 observed 23 tasks, single-arm, pass 78%, 2026-10-30
 ```
 
 and only where the lane has no `measured` row — observational data can contest
-a priors row, never overwrite a measured one. The one strong signal that flips
-a recommended arm: the routed arm failing 2+ times while an escalation-tier
-model passed. Everything else informs; only the harness's k-sample batches
-make rows gold.
+a priors row, never overwrite a measured one. When gonogo is installed, each
+observed row also carries its decide() verdict, so a row with 3 outcomes reads
+as INSUFFICIENT_EVIDENCE rather than a pass rate someone will trust. The one
+strong signal that flips a recommended arm: the routed arm failing 2+ times
+while an escalation-tier model passed. Everything else informs; only the
+harness's k-sample batches make rows gold.
+
+**Publishing the labels.** The live ledger stays local and append-only;
+this repo carries snapshots under `data/flywheel/labels.jsonl`, committed
+alongside the code that reads the schema. Records contain routed task
+texts and no response bodies; early snapshots include unrated route calls
+from install verification. When the dataset grows past a few hundred
+outcomes — or multiple users contribute ledgers — it moves to a Hugging
+Face dataset with a loader script; the repo snapshot is the v1 home.
