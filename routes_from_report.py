@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
+import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -74,16 +75,29 @@ def _slug(lane: str) -> str:
     return low.replace(" ", "-").replace("/", "-").replace(",", "").strip("-")
 
 
-def _route_row(lane_id: str, stats: dict, date: str) -> dict:
+def _route_row(lane_id: str, stats: dict, date: str, model_id: str) -> dict:
     """One routes.yaml lane row from the winning CSV row for a lane."""
     return {
         "id": lane_id,
         "label": stats.get("label") or lane_id.replace("-", " ").title(),
-        "model": stats["model"],
+        "model": model_id,
         "effort": stats["effort"],
-        "provenance": (f"measured {stats['n']} tasks, cov {stats['cov']}, "
+        "provenance": (f"measured {stats['n_tasks']} tasks, cov {stats['cov']}, "
                        f"all-in ${stats['allin']}/succ, {date}"),
     }
+
+
+def load_model_ids(models_path: Path | None) -> dict[str, str]:
+    """Map harness arm names (name@effort or plain name) -> routable model ids.
+
+    The models.json used by the run is the authority; without it, arm names
+    pass through unchanged (flagged in provenance as unverified ids)."""
+    if not models_path or not models_path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for m in json.load(open(models_path, encoding="utf-8")):
+        out[m["name"]] = m.get("model", m["name"])
+    return out
 
 
 def load_report(csv_path: Path) -> dict[str, dict]:
@@ -112,12 +126,14 @@ def load_report(csv_path: Path) -> dict[str, dict]:
     return winners
 
 
-def generate(csv_path: Path, out_path: Path, existing_path: Path | None) -> int:
+def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
+             models_path: Path | None = None, k: int = 1) -> int:
     existing: dict[str, dict] = {}
     if existing_path and existing_path.exists():
         raw = yaml.safe_load(existing_path.read_text(encoding="utf-8")) or {}
         existing = {l["id"]: l for l in (raw.get("lanes") or []) if isinstance(l, dict) and l.get("id")}
 
+    model_ids = load_model_ids(models_path)
     winners = load_report(csv_path)
     if not winners:
         print("no routeable rows in CSV (all lanes failed or no data); nothing generated")
@@ -130,11 +146,14 @@ def generate(csv_path: Path, out_path: Path, existing_path: Path | None) -> int:
     # Measured lanes first, in stable order.
     for lane_name in sorted(winners):
         stats = winners[lane_name]
+        stats["k"] = k
+        stats["n_tasks"] = max(1, round(stats["n_i"] / k)) if k > 1 else stats["n_i"]
         lane_id = _slug(lane_name)
         if lane_id in seen_ids:
             continue
         seen_ids.add(lane_id)
-        row = _route_row(lane_id, stats, date)
+        model_id = model_ids.get(stats["model"], stats["model"])
+        row = _route_row(lane_id, stats, date, model_id)
         prev = existing.get(lane_id) or {}
         for key in KEEP_FROM_EXISTING:
             if prev.get(key):
@@ -168,8 +187,13 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=str(here / "data" / "routes.generated.yaml"))
     ap.add_argument("--routes", default=str(here / "data" / "routes.yaml"),
                     help="existing routes.yaml whose classifier fields/unmeasured rows are preserved")
+    ap.add_argument("--models", default=None,
+                    help="models.json used by the run; maps arm names -> routable model ids")
+    ap.add_argument("--k", type=int, default=1,
+                    help="samples per task in the run; the CSV's n column counts samples, not tasks")
     a = ap.parse_args(argv)
-    return generate(Path(a.csv), Path(a.out), Path(a.routes) if a.routes else None)
+    return generate(Path(a.csv), Path(a.out), Path(a.routes) if a.routes else None,
+                     Path(a.models) if a.models else None, a.k)
 
 
 if __name__ == "__main__":
