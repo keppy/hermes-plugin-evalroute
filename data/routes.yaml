@@ -4,7 +4,7 @@ lanes:
   label: Alignment reasoning, paper claims
   model: z-ai/glm-5.3
   effort: medium
-  provenance: measured 10 tasks, cov 1.0, all-in $0.011933187000000001/succ, 2026-09-26
+  provenance: measured 10 tasks, cov 1.0, all-in $0.0119/succ, 2026-09-26
   keywords:
   - alignment
   - reward hacking
@@ -20,12 +20,11 @@ lanes:
   - rlaif
   - constitutional
   match_hint: reasoning about failure modes and paper claims
-  notes: unmeasured - the evalroute harness is meant to measure this lane
 - id: dl-ml-research-engineering
   label: DL / ML research engineering
   model: z-ai/glm-5.3
   effort: high
-  provenance: measured 10 tasks, cov 1.0, all-in $0.0023573212/succ, 2026-09-26
+  provenance: measured 10 tasks, cov 1.0, all-in $0.0024/succ, 2026-09-26
   keywords:
   - training run
   - fine-tune
@@ -51,7 +50,6 @@ lanes:
   - colocate
   match_hint: training/eval harness engineering
   escalation: gpt-6-sol
-  notes: contested tier - verify with your own harness before trusting
 - id: routine-coding
   label: Routine coding
   keywords:

@@ -83,7 +83,7 @@ def _route_row(lane_id: str, stats: dict, date: str, model_id: str) -> dict:
         "model": model_id,
         "effort": stats["effort"],
         "provenance": (f"measured {stats['n_tasks']} tasks, cov {stats['cov']}, "
-                       f"all-in ${stats['allin']}/succ, {date}"),
+                       f"all-in ${float(stats['allin']):.4f}/succ, {date}"),
     }
 
 
@@ -158,6 +158,10 @@ def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
         for key in KEEP_FROM_EXISTING:
             if prev.get(key):
                 row[key] = prev[key]
+        # A measured row must not carry stale priors-era caveats that
+        # contradict it ("unmeasured", "verify with your own harness").
+        if str(row.get("notes", "")).lower().lstrip().startswith(("unmeasured", "contested")):
+            row.pop("notes", None)
         if prev.get("label"):
             row["label"] = prev["label"]
         lanes_out.append(row)
