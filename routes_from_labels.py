@@ -69,6 +69,27 @@ def aggregate(labels: list[dict[str, Any]], max_age_days: int = MAX_STALE_DAYS) 
         }
         for lane, arms in lanes.items()
     }
+
+    # Facet aggregation: per-facet pass rates AND co-occurrence tuples. The
+    # conjunction nodes (long-doc + domain-dlml etc.) validate the dominance
+    # rule for free as labels accumulate; legacy records without facets are
+    # simply not counted here.
+    facet_single: dict[str, dict[str, int]] = defaultdict(lambda: dict(attempts=0, passes=0))
+    facet_pairs: dict[str, dict[str, int]] = defaultdict(lambda: dict(attempts=0, passes=0))
+    for out in outcomes:
+        fs = sorted(out.get("facets") or [])
+        passed = out.get("rated") == "pass"
+        for fid in fs:
+            facet_single[fid]["attempts"] += 1
+            facet_single[fid]["passes"] += int(passed)
+        for i in range(len(fs)):
+            for j in range(i + 1, len(fs)):
+                key = f"{fs[i]} + {fs[j]}"
+                facet_pairs[key]["attempts"] += 1
+                facet_pairs[key]["passes"] += int(passed)
+    facet_stats = {fid: dict(v) for fid, v in sorted(facet_single.items())}
+    pair_stats = {k: dict(v) for k, v in sorted(facet_pairs.items())}
+
     return {
         "routes": len(routes),
         "outcomes": len(outcomes),
@@ -76,6 +97,8 @@ def aggregate(labels: list[dict[str, Any]], max_age_days: int = MAX_STALE_DAYS) 
         "corrections": [{"from": c.get("from_lane"), "to": c.get("to_lane")}
                         for c in corrections],
         "lanes": lane_stats,
+        "facets": facet_stats,
+        "facet_pairs": pair_stats,
         "stale_cutoff_days": max_age_days,
     }
 
@@ -158,6 +181,16 @@ def main(argv=None) -> int:
         print(f"\nlane: {lane}   ({ls['outcomes']} outcomes, pass {ls['pass_rate']:.0%})")
         for arm, astat in ls["arms"].items():
             print(f"  {arm:<40} {astat['attempts']} tries, {astat['passes']} pass, {astat['fails']} fail")
+    if stats.get("facets"):
+        print("\nfacets (per-dimension outcomes):")
+        for fid, fs in stats["facets"].items():
+            pr = fs["passes"] / max(1, fs["attempts"])
+            print(f"  {fid:<28} {fs['attempts']} outcomes, pass {pr:.0%}")
+    if stats.get("facet_pairs"):
+        print("\nfacet conjunctions (the graph nodes):")
+        for key, fs in stats["facet_pairs"].items():
+            pr = fs["passes"] / max(1, fs["attempts"])
+            print(f"  {key:<44} {fs['attempts']} outcomes, pass {pr:.0%}")
     if a.apply:
         out_path = here / "data" / "routes.observed.yaml"
         lanes, applied = merge_observed(Path(a.routes), labels)

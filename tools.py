@@ -112,6 +112,7 @@ _LLM_SCHEMA = {
     "type": "object",
     "properties": {
         "lane": {"type": "string"},
+        "facets": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "number"},
     },
     "required": ["lane"],
@@ -122,25 +123,77 @@ _LLM_SYSTEM = (
     "one lane from the provided list. Judge by what the work IS, not by which "
     "words appear: a description of an assistant's duties is an ORCHESTRATION "
     "task (it plans and delegates); negated capabilities ('not usually hard "
-    "math') are evidence AGAINST a lane, not for it. Return JSON: "
-    '{"lane": "<id>", "confidence": 0-1}.'
+    "math') are evidence AGAINST a lane, not for it. ALSO name the task's "
+    "facets along the provided axes (a task may have several: e.g. reading "
+    "many files AND judging RL training plans = long-doc + domain-dlml). "
+    'Return JSON: {"lane": "<id>", "facets": ["<facet-id>", ...], '
+    '"confidence": 0-1}.'
 )
 
 
-def _llm_fallback(task: str, lanes: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, float]:
-    """Classify via the host-owned LLM facade (ctx.llm). Returns (lane, conf).
+# ------------------------------------------------------------------ facets
 
-    Failures (no facade, LLM error, unparseable/unknown lane) return (None, 0)
-    and the caller falls through to the deterministic result.
+def _load_facets() -> list[dict[str, Any]]:
+    """data/facets.yaml; missing file -> no facet inference (not an error)."""
+    p = PLUGIN_DIR / "data" / "facets.yaml"
+    if not p.exists():
+        return []
+    try:
+        import yaml
+        return (yaml.safe_load(p.read_text(encoding="utf-8")) or {}).get("facets") or []
+    except Exception:
+        return []
+
+
+def facets_for_hits(hit_lanes: list[str]) -> list[str]:
+    """Facets implied by the lanes that drew keyword hits (rules path)."""
+    if not hit_lanes:
+        return []
+    return [f["id"] for f in _load_facets()
+            if any(lid in hit_lanes for lid in f.get("lanes", []))]
+
+
+def normalize_facets(raw: list[str]) -> list[str]:
+    """Keep known facet ids only, deduped, stable order per facets.yaml."""
+    known = {f["id"] for f in _load_facets()}
+    return [fid for fid in dict.fromkeys(raw or []) if fid in known]
+
+
+def facet_dominance(facet_ids: list[str]) -> str:
+    """Which facet drives the arm, and why — the conjunctive composition rule.
+
+    Domain beats input-shape (judgment is the scarcer resource; input handling
+    is what flash-class models are FOR), demand-tier beats both when the task
+    is judgment-heavy. With <=1 facet, the lane alone decided; return ''.
+    """
+    if len(facet_ids) <= 1:
+        return ""
+    axis_of = {f["id"]: f["axis"] for f in _load_facets()}
+    axes = {axis_of.get(fid, "") for fid in facet_ids}
+    if "demand-tier" in axes and "domain" in axes:
+        return "tier + domain drive the arm; input-shape rides along"
+    if "domain" in axes:
+        return "domain drives the arm; input-shape rides along"
+    return "most demanding facet drives the arm"
+
+
+def _llm_fallback(task: str, lanes: list[dict[str, Any]]
+                  ) -> tuple[dict[str, Any] | None, float, list[str]]:
+    """Classify via the host-owned LLM facade. Returns (lane, conf, facets).
+
+    Failures (no facade, LLM error, unparseable/unknown lane) return
+    (None, 0, []) and the caller falls through to the deterministic result.
     """
     if _PLUGIN_LLM is None:
-        return None, 0.0
+        return None, 0.0, []
     try:
         lane_list = "\n".join(
             f'- {l["id"]}: {l["label"]} — {l.get("match_hint", "")}' for l in lanes)
+        facet_list = "\n".join(
+            f'- {f["id"]} ({f["axis"]}): {f["description"]}' for f in _load_facets())
         instructions = (
             "Classify this task description into exactly one lane.\n\n"
-            f"Lanes:\n{lane_list}\n\nTask:\n{task}"
+            f"Lanes:\n{lane_list}\n\nFacets (name all that apply):\n{facet_list}\n\nTask:\n{task}"
         )
         result = _PLUGIN_LLM.complete_structured(
             instructions=instructions,
@@ -155,13 +208,37 @@ def _llm_fallback(task: str, lanes: list[dict[str, Any]]) -> tuple[dict[str, Any
         parsed = getattr(result, "parsed", None) or {}
         lane_id = str(parsed.get("lane", "")).strip()
         conf = float(parsed.get("confidence", 0.0) or 0.0)
+        facets = normalize_facets(parsed.get("facets") or [])
         lane = _lane_by_id(lane_id)
         if lane is None or conf <= 0:
-            return None, 0.0
-        return lane, min(1.0, conf)
+            return None, 0.0, []
+        return lane, min(1.0, conf), facets
     except Exception as exc:
         logger.warning("evalroute LLM fallback failed: %s", exc)
-        return None, 0.0
+        return None, 0.0, []
+
+
+def route_full(task: str) -> tuple[dict[str, Any], float, list[str], str, list[str]]:
+    """route_for plus the task's facets (the label's extra dimensions).
+
+    Facets come from the same evidence as the lane: rules path derives them
+    from the lanes that drew hits (any lane with a hit is a facet claim);
+    LLM path takes the classifier's facet list. Unknown/empty -> the winning
+    lane's own facets only, so the label never silently loses a dimension.
+    """
+    lanes = _load_routes()
+    lane, conf, hits = classify(task)
+    distinct = len(set(hits))
+    hit_lane_ids = [l["id"] for l in lanes if any(_hit(kw, _norm(task)) for kw in l.get("keywords", []))]
+    facets = facets_for_hits(hit_lane_ids)
+    if distinct >= _LLM_MIN_HITS:
+        return lane, conf, hits, "rules-strong", facets
+    llm_lane, llm_conf, llm_facets = _llm_fallback(task, lanes)
+    if llm_lane is not None:
+        return llm_lane, llm_conf, hits, "llm", (llm_facets or facets)
+    if hits:
+        return lane, conf, hits, "rules-weak", facets
+    return lane, conf, hits, "default", facets
 
 
 def route_for(task: str) -> tuple[dict[str, Any], float, list[str], str]:
@@ -176,18 +253,8 @@ def route_for(task: str) -> tuple[dict[str, Any], float, list[str], str]:
     researchy tasks' has zero keyword signal and needs it). LLM failure falls
     back to the weak rules result anyway.
     """
-    lanes = _load_routes()
-    lane, conf, hits = classify(task)
-    distinct = len(set(hits))
-    if distinct >= _LLM_MIN_HITS:
-        return lane, conf, hits, "rules-strong"
-    # Rules are weak: paraphrase, or a single ambiguous hit. Escalate.
-    llm_lane, llm_conf = _llm_fallback(task, lanes)
-    if llm_lane is not None:
-        return llm_lane, llm_conf, hits, "llm"
-    if hits:
-        return lane, conf, hits, "rules-weak"
-    return lane, conf, hits, "default"
+    lane, conf, hits, method, _facets = route_full(task)
+    return lane, conf, hits, method
 
 
 def classify(task: str) -> tuple[dict[str, Any], float, list[str]]:
@@ -218,12 +285,18 @@ def classify(task: str) -> tuple[dict[str, Any], float, list[str]]:
 
 
 def route_card(lane: dict[str, Any], conf: float, hits: list[str],
-               pinned: bool = False, method: str = "rules") -> str:
+               pinned: bool = False, method: str = "rules",
+               facets: list[str] | None = None) -> str:
     """Render the human-readable route card."""
     lines = [
         f"lane: {lane['label']} ({lane['id']})",
         f"route: {lane['model']} @ {lane['effort']}   <- run: /model {lane['model']}",
     ]
+    if facets and len(facets) > 1:
+        dom = facet_dominance(facets)
+        lines.append(f"facets: {' + '.join(facets)} (conjunctive — {dom})")
+    elif facets:
+        lines.append(f"facets: {facets[0]}")
     if lane.get("escalation"):
         lines.append(f"escalation: {lane['escalation']} (when coverage gaps or the task turns out harder)")
     if pinned:
@@ -276,14 +349,14 @@ def evalroute_route(args: dict[str, Any], **_) -> str:
                 return json.dumps({"error": f"unknown lane {lane_id!r}; known lanes: {known}"})
             card = route_card(lane, 1.0, [], pinned=True)
             return _tool_result(card, lane, 1.0, pinned=True, method="pinned")
-        lane, conf, hits, method = route_for(task)
+        lane, conf, hits, method, facets = route_full(task)
         try:  # flywheel label; logging must never break the card
             from . import flywheel as _fw
-            _fw.note_route(task, lane, method, conf)
+            _fw.note_route(task, lane, method, conf, facets=facets)
         except Exception:
             pass
-        return _tool_result(route_card(lane, conf, hits, method=method), lane, conf,
-                            pinned=False, method=method)
+        return _tool_result(route_card(lane, conf, hits, method=method, facets=facets),
+                            lane, conf, pinned=False, method=method)
     except Exception as exc:  # route table broken -> actionable error, not a crash
         return json.dumps({"error": f"evalroute: {exc}"})
 
@@ -305,13 +378,13 @@ def _card_for_args(raw_args: str) -> str:
     if lane_id:
         known = ", ".join(l["id"] for l in _load_routes())
         raise ValueError(f"unknown lane {lane_id!r}; known lanes: {known}")
-    lane_obj, conf, hits, method = route_for(task)
+    lane_obj, conf, hits, method, facets = route_full(task)
     try:  # flywheel label; logging must never break the card
         from . import flywheel as _fw
-        _fw.note_route(task, lane_obj, method, conf)
+        _fw.note_route(task, lane_obj, method, conf, facets=facets)
     except Exception:
         pass
-    return route_card(lane_obj, conf, hits, method=method)
+    return route_card(lane_obj, conf, hits, method=method, facets=facets)
 
 
 def handle_route_command(raw_args: str) -> str:

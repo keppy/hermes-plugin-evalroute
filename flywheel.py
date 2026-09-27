@@ -69,13 +69,20 @@ def read_labels() -> list[dict[str, Any]]:
 _MEMORY: dict[str, Any] = {"route": None, "turn": None}
 
 
-def note_route(task: str, lane: dict[str, Any], method: str, conf: float) -> None:
-    """A route card was issued; persist the assignment and remember it for /rate."""
+def note_route(task: str, lane: dict[str, Any], method: str, conf: float,
+                facets: Optional[list[str]] = None) -> None:
+    """A route card was issued; persist the assignment and remember it for /rate.
+
+    facets: the task's dimensions beyond the lane (long-doc, domain-*, tier-*).
+    Absent for legacy callers / old records; aggregate() tolerates that.
+    """
     record = {
         "kind": "route", "task": task[:500], "lane": lane["id"], "lane_label": lane["label"],
         "model": lane["model"], "effort": lane["effort"], "method": method,
         "confidence": round(float(conf), 2),
     }
+    if facets:
+        record["facets"] = facets
     _append(record)
     _MEMORY["route"] = dict(record)
 
@@ -208,6 +215,8 @@ def handle_rate(raw_args: str) -> str:
         "method": route.get("method"), "confidence": route.get("confidence"),
         "consumes": route.get("ts"),
     }
+    if route.get("facets"):
+        record["facets"] = route["facets"]
     if lane_fix:
         if tools._lane_by_id(lane_fix) is None:
             known = ", ".join(l["id"] for l in tools._load_routes())
