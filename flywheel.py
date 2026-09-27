@@ -110,6 +110,25 @@ def _last_route() -> Optional[dict[str, Any]]:
     return None
 
 
+def _pending_label(route: Optional[dict[str, Any]]) -> str:
+    """One-line summary of the row /rate just closed (or is about to).
+
+    The mismatch note is the point: the flywheel records the arm that
+    actually served the turns, which can differ from the card — this makes
+    the attribution visible at rating time instead of in a CSV later.
+    """
+    if not route:
+        return "no unrated route on file - /rate has nothing to label"
+    actual = _actual_model(route)
+    bits = [f"{route.get('lane', '?')}"]
+    if actual and route.get("model") and actual != route.get("model"):
+        bits.append(f"card said {route.get('model')}, you ran {actual} (mismatch)")
+    else:
+        bits.append(f"arm {actual or route.get('model', '?')}")
+    task = (route.get("task") or "")[:48]
+    return f"labeled: {' - '.join(bits)} - task: {task!r}"
+
+
 def _actual_model(route: Optional[dict[str, Any]]) -> Optional[str]:
     """The model actually used: last turn seen in this process, else last /model switch."""
     turn = _MEMORY.get("turn")
@@ -227,14 +246,15 @@ def handle_rate(raw_args: str) -> str:
     _append(record)
     _MEMORY["route"] = None  # outcome consumes the pending route
 
+    confirm = _pending_label(route)
     if lane_fix:
         _append({"kind": "lane_correction", "from_lane": route.get("lane"),
                  "to_lane": lane_fix, "task": route.get("task", "")[:200]})
         return (f"logged: {rating} (lane corrected {route.get('lane')} -> {lane_fix}). "
-                "The correction also feeds the classifier's keyword table.")
+                "The correction also feeds the classifier's keyword table.\n" + confirm)
     arm = f"{record['actual_model'] or '?'} @ {effort or '?'}"
     return (f"logged: {rating} for lane {route.get('lane')} on arm {arm}. "
-            f"{_counts_summary()}")
+            f"{confirm}. {_counts_summary()}")
 
 
 def _counts_summary() -> str:
