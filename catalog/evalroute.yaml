@@ -3,7 +3,7 @@
 # plugin-catalog/ is the one that installs.
 name: evalroute
 repo: https://github.com/keppy/hermes-plugin-evalroute
-sha: 7f2a7be43d9641f25341eddab13f291303ad5bee
+sha: b45f1362f0f41885a3067567d621d16e0cb57678
 description: Route a task to the right (model, reasoning effort) arm before you start.
   Classifies the task into a lane, prints a provenance-carrying route card, and installs
   per-model reasoning-effort defaults so /model carries the lane's effort. Local only -
