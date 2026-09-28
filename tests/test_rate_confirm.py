@@ -22,14 +22,17 @@ def test_rate_confirmation_names_the_row(home):
 
 
 def test_rate_flags_arm_mismatch(home):
-    # card recommended glm-5.3; the turns were actually served by kimi-k3
+    # /model in a process-global hook is a candidate, not a verified session join.
     lane = tools._lane_by_id("dl-ml-research-engineering")
     flywheel.note_route("fix the NaN loss in our GRPO run", lane, "llm", 0.7)
-    flywheel.on_post_llm_call(session_id="s", model="moonshotai/kimi-k3")
+    flywheel.on_pre_command(command="model", args_raw="moonshotai/kimi-k3", session_key="s")
     out = handle_rate("pass")
-    assert "(mismatch)" in out
+    assert "session unverified" in out
+    outcome = next(r for r in reversed(flywheel.read_labels()) if r["kind"] == "outcome")
+    assert outcome["actual_model"] is None and outcome["arm_attribution"] == "unknown"
     assert "z-ai/glm-5.3" in out
     assert "moonshotai/kimi-k3" in out
+    assert "switches unverified" in out
 
 
 def test_rate_no_route_message(home):

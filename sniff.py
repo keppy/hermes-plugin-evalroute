@@ -13,12 +13,11 @@ Design rules (from the phase-1 design conversation):
   active model.
 - Never fires on subagents or gateway platforms where the user may have
   already routed deliberately; CLI/desktop only by default.
-- Session-cap continuations: on the first turn, an unrated route in the
-  labels file with no in-memory counterpart means a previous session armed
-  a row and never closed it (a hit session cap, a closed terminal, a CLI
-  route). One advisory line tells the user to keep the arm and `/rate`
-  rather than re-route — it supersedes the mismatch check, because a filed
-  route is stronger evidence than a keyword classification.
+- Pending route notice: on the first turn, an unrated route in the labels
+  file with no in-memory counterpart was armed by another process (a
+  previous session, the CLI). One advisory line names the route id and says
+  its session is unknown; a route this process issued (`/route` before turn
+  1) is the normal workflow and gets no notice.
 """
 
 from __future__ import annotations
@@ -62,24 +61,28 @@ def sniff(session_id: str, user_message, is_first_turn: bool, model: str,
     if not isinstance(user_message, str) or not user_message.strip():
         return None
 
-    # Cross-session continuation: an unrated route in the file with no
-    # in-memory counterpart was armed by another process (previous session
-    # or the CLI). Session caps make this common — one advisory line, and
-    # it supersedes the mismatch check below: a filed route is stronger
-    # evidence than a first-turn classification.
+    # A pending route with no in-memory counterpart was armed by another
+    # process (previous session, CLI). The sniff only runs on single-user
+    # platforms (cli/tui/desktop), so a route THIS process issued is the
+    # user's own `/route` before turn 1 - the normal workflow, not a notice.
+    # Ownership of a file-only route is still unknown; the text says so.
     try:
+        pending = None
         if _fw._MEMORY.get("route") is None:
             pending = _fw.pending_route_from_file()
-            if pending is not None:
-                task = (pending.get("task") or "")[:60]
-                return {"context": (
-                    f"[evalroute] An unrated route is pending from an earlier "
-                    f"session: {pending.get('lane', '?')} - {task!r}. If you are "
-                    f"continuing that task, stay on {pending.get('model', '?')} "
-                    f"and `/rate pass|fail --note ...` when it completes - do NOT "
-                    f"`/route` it again (a new route displaces the pending row). "
-                    f"Starting a different task? `/rate skip` clears it first."
-                )}
+        if pending is not None:
+            task = (pending.get("task") or "")[:60]
+            return {"context": (
+                f"[evalroute] An unrated route is pending in this profile "
+                f"(session unknown): {pending.get('lane', '?')} - {task!r}. "
+                f"Route ID: {pending.get('id', 'legacy')}. If you are "
+                f"continuing that task, stay on {pending.get('model', '?')} "
+                f"and `/rate pass|fail "
+                f"{'--route-id ' + pending['id'] + ' ' if pending.get('id') else ''}"
+                f"--note ...` when it completes; verify the selected row. Please do NOT "
+                f"`/route` it again (a new route can hide this pending row as the latest). "
+                f"Starting a different task? Rate or skip that ID first if it is yours."
+            )}
     except Exception:
         pass  # advisory layer must never break a turn
 

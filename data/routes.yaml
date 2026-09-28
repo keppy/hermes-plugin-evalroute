@@ -4,8 +4,8 @@ lanes:
   label: Alignment reasoning, paper claims
   model: z-ai/glm-5.3
   effort: medium
-  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0119/succ, 2026-09-27; gap vs
-    runner-up: 100.0% vs 100.0% (+0.0% [+0.0%, +0.0%], p=1.000) — not distinguishable
+  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0119/succ, 2026-09-27; v1 runs omit model_id (mapped via models.json); gap vs
+    runner-up: 100.0% vs 100.0% (+0.0% [-33.4%, +33.4%], p=1.000) — not distinguishable
     on 10 shared cases'
   keywords:
   - alignment
@@ -22,12 +22,13 @@ lanes:
   - rlaif
   - constitutional
   match_hint: reasoning about failure modes and paper claims
+  notes: 'Four of five evaluated arms have 30 judged samples each; qwen3.8-max@medium has 30 pending, not graded. No checker audit. The p=1 and zero-width empirical gap describe this ten-task sample, not population equivalence.'
 - id: routine-coding
   label: Routine coding
   model: z-ai/glm-5.3-flash
   effort: medium
-  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0001/succ, 2026-09-27; gap vs
-    runner-up: 100.0% vs 100.0% (+0.0% [+0.0%, +0.0%], p=1.000) — not distinguishable
+  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0001/succ, 2026-09-27; v1 runs omit model_id (mapped via models.json); gap vs
+    runner-up: 100.0% vs 100.0% (+0.0% [-33.4%, +33.4%], p=1.000) — not distinguishable
     on 10 shared cases'
   keywords:
   - refactor
@@ -49,15 +50,13 @@ lanes:
   - helper
   match_hint: everyday code changes where a test or compiler checks the result
   escalation: gpt-6-luna
-  notes: verbose already; tests catch misses cheaply, so retries beat deep thinking;
-    ds-v4.1-flash@medium had pass^k 1.00 at same price - prefer it when determinism
-    matters (measured note)
+  notes: 'Verbose already; tests catch misses cheaply, so retries beat deep thinking. ds-v4.1-flash@medium had pass^k 1.00, but costs more; prefer when determinism matters. p=1 and a zero-width empirical gap at n=10 do not prove population equivalence.'
 - id: dl-ml-research-engineering
   label: DL / ML research engineering
   model: z-ai/glm-5.3
   effort: high
-  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0024/succ, 2026-09-27; gap vs
-    runner-up: 100.0% vs 100.0% (+0.0% [+0.0%, +0.0%], p=1.000) — not distinguishable
+  provenance: 'measured 10 tasks, cov 1.0, all-in $0.0024/succ, 2026-09-27; v1 runs omit model_id (mapped via models.json); gap vs
+    runner-up: 100.0% vs 100.0% (+0.0% [-33.4%, +33.4%], p=1.000) — not distinguishable
     on 10 shared cases'
   keywords:
   - training run
@@ -84,6 +83,7 @@ lanes:
   - colocate
   match_hint: training/eval harness engineering
   escalation: gpt-6-sol
+  notes: 'The ten-task p=1, zero-width empirical gap vs runner-up is not proof of population equivalence; this route is a cost choice on measured coverage.'
 - id: hard-agentic-coding
   label: Hard agentic coding
   keywords:

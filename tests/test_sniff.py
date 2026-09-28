@@ -106,13 +106,25 @@ def test_sniff_flags_cross_session_pending_route():
     assert "do NOT" in out["context"]
 
 
-def test_sniff_quiet_when_route_is_in_memory():
-    # same-session flow: /route in THIS process -> in-memory route set ->
-    # no continuation notice (falls through to the normal mismatch check)
+def test_sniff_own_route_this_process_is_not_a_notice():
+    # `/route` before turn 1 in THIS process is the normal workflow: the
+    # in-memory route is the user's own, so no pending-route advisory fires
+    # (and no mismatch either - the session is on the routed model).
     lane = tools._lane_by_id("dl-ml-research-engineering")
     flywheel.note_route("build the exemplar harness", lane, "llm", 0.8)
+    out = _first_turn("build the exemplar harness", model="z-ai/glm-5.3")
+    assert out is None
+
+
+def test_sniff_file_only_route_says_session_unknown():
+    # A route on file with no in-memory counterpart: another process armed
+    # it, so the notice names the id and says ownership is unknown.
+    lane = tools._lane_by_id("dl-ml-research-engineering")
+    flywheel.note_route("build the exemplar harness", lane, "llm", 0.8)
+    flywheel._MEMORY["route"] = None
     out = _first_turn("continue building the harness", model="z-ai/glm-5.3")
-    assert out is None or "pending" not in out["context"].lower()
+    assert out is not None and "session unknown" in out["context"]
+    assert flywheel.read_labels()[0]["id"] in out["context"]
 
 
 def test_sniff_notice_supersedes_mismatch():

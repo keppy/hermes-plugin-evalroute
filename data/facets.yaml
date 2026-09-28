@@ -1,7 +1,7 @@
 # Task facets: orthogonal dimensions a task can occupy simultaneously.
 # Lanes are the ROUTING decision (one arm); facets are the LABEL — what the
 # task actually is along each axis. A task may occupy one facet per axis.
-# The route satisfies the most DEMANDING facet (conjunctive composition).
+# Facets are descriptive labels only; the lane classifier chooses the arm.
 version: 1
 
 facets:

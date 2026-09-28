@@ -76,6 +76,10 @@ def test_negation_guard_keeps_positive_hits():
     lane, conf, hits = tools.classify("prove the theorem, give a derivation and a lemma")
     assert lane["id"] == "math-first-principles"
 
+def test_negated_first_occurrence_does_not_hide_later_positive_hit():
+    assert tools._hit("math", tools._norm("not math; now solve the math problem"))
+    assert not tools._hit("math", tools._norm("not math, and definitely no math"))
+
 
 # --------------------------------------------------- route_for + LLM fallback
 
@@ -177,6 +181,15 @@ def test_tool_returns_json_with_card():
 def test_tool_pinned_lane_skips_classification():
     out = json.loads(tools.evalroute_route({"task": "whatever", "lane": "prose"}))
     assert out["lane"] == "prose" and out["pinned"] is True
+
+def test_pinned_tool_route_is_logged_and_consumed(isolated_hermes_home):
+    import flywheel
+    out = json.loads(tools.evalroute_route({"task": "reclassify", "lane": "prose"}))
+    assert out["lane"] == "prose"
+    assert flywheel.handle_rate("pass").startswith("logged: pass")
+    route, outcome = flywheel.read_labels()[:2]
+    assert route["method"] == "pinned" and outcome["route_lane"] == "prose"
+    assert outcome["consumes_id"] == route["id"]
 
 
 def test_tool_unknown_lane_is_actionable_error():

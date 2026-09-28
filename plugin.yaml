@@ -1,11 +1,12 @@
 name: evalroute
-version: 0.3.2
+version: "0.3.3"
 manifest_version: 2
 api_version: 1
 description: >-
-  Route a task to the right (model, effort) arm before you start. Classifies
-  the task into a lane, returns a route card with provenance, and installs
-  per-model reasoning-effort defaults so /model carries the lane's effort.
+  Route a task to a (model, effort) arm with provenance. Strong keyword
+  classification runs locally; weak tasks may use the host LLM and consume
+  tokens. Per-model effort defaults are installed, but a card names the
+  lane's exact effort when a shared model needs a different setting.
 author: James Dominguez (keppy)
 license: MIT
 homepage: https://github.com/keppy/hermes-plugin-evalroute

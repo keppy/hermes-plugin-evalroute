@@ -7,8 +7,9 @@ EVALROUTE_ROUTE = {
         "Use when the user asks which model to use for a task, before a long or expensive "
         "session, when switching models mid-project, or when planning subagent delegation. "
         "Returns a route card with the lane, the model, the effort, the escalation option, "
-        "and the provenance of the recommendation. Classification is deterministic keyword "
-        "rules over a measured route table; it costs nothing and makes no API calls."
+        "and the provenance of the recommendation. Strong keyword rules run locally; "
+        "weak-signal tasks may call the host LLM and consume tokens. Measured lanes and "
+        "prior-only lanes are labeled in the card."
     ),
     "parameters": {
         "type": "object",
@@ -22,6 +23,12 @@ EVALROUTE_ROUTE = {
                 "type": "string",
                 "description": "Optional: pin the lane explicitly (one of the route table's "
                                "lane ids, e.g. 'math-first-principles') to skip classification.",
+            },
+            "replace_route_id": {
+                "type": "string",
+                "description": "Optional with lane: the prior route card's explicit ID. Only that "
+                               "pending route is consumed and corrected; task text alone never "
+                               "identifies a session.",
             },
         },
         "required": ["task"],

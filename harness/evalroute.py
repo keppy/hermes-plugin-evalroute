@@ -28,8 +28,9 @@ Effort (REQUIRED on every model entry; run refuses to start without it):
   Opus 5 was high), so an unset effort means you don't know what you measured.
   openai -> body.reasoning_effort   anthropic -> output_config.effort (low..max)   cmd -> {effort}
   One entry per (model, effort): the report and router treat each as its own arm.
-  Records carry a config hash (api, model, base_url, effort, extra, cmd); editing an entry reruns
-  it, and the report splits old/new configs instead of pooling them.
+  New records carry a v2 run signature over the complete task/checker, effective
+  model configuration including token cap/prices, and judge configuration.
+  Legacy rows without a signature remain reportable, but cannot be resumed as v2.
 
 Model api: openai (any OpenAI-compatible: Nous, OpenAI) | anthropic | cmd.
   cmd = agent-harness shim (e.g. Hermes): template gets {prompt_file} {system_file} {model} {effort};
@@ -38,8 +39,9 @@ Model api: openai (any OpenAI-compatible: Nous, OpenAI) | anthropic | cmd.
   Optional per model: "extra" (other API kwargs; not effort), "max_param" ("max_completion_tokens"
   for OpenAI reasoning models), "max_tokens" (per-entry cap; raise it for xhigh/max, since it bounds
   thinking + answer), "cached", "cache_write", "conc".
-Records: append-only JSONL. `run` resumes; errored cells retry. Editing a task's prompt
-changes its hash and the report warns about mixed versions.
+Records: append-only JSONL. `run` resumes only matching signatures; errored
+cells retry. Mixed legacy/v2 or changed task/checker versions cannot be pooled
+in one report; use separate output files for different taskset versions.
 """
 import argparse, asyncio, hashlib, json, math, os, random, re, statistics, subprocess, sys, tempfile, time
 from collections import defaultdict
@@ -53,11 +55,45 @@ JUDGE = ("Grade the RESPONSE against the RUBRIC. Be strict: fluent but wrong is 
 def jread(p): return [json.loads(l) for l in open(p) if l.strip()] if Path(p).exists() else []
 def jadd(p, r):
     with open(p, "a") as f: f.write(json.dumps(r, ensure_ascii=False) + "\n")
-def key(r): return f'{r["task"]}|{r["model"]}|{r["sample"]}|{r.get("cfg", "")}'
+def key(r):
+    legacy = f'{r["task"]}|{r["model"]}|{r["sample"]}|{r.get("cfg", "")}'
+    return legacy + (f'|{r["sig"]}' if r.get("sig") else "")
 def cfghash(m):
     return hashlib.sha256(json.dumps({k: m.get(k) for k in ("api", "model", "base_url", "effort", "extra", "cmd")},
                                      sort_keys=True).encode()).hexdigest()[:8]
 def phash(t): return hashlib.sha256((t.get("system", "") + "\0" + t["prompt"]).encode()).hexdigest()[:10]
+
+def digest(obj):
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+
+def task_contract(t):
+    """Prompt, system, lane, and full checker spec (including setup/rubric)."""
+    return digest(t)
+
+def model_contract(m, max_tokens):
+    """Full request and price schedule; concurrency does not affect a response."""
+    return digest({"model": {k: v for k, v in m.items() if k != "conc"},
+                   "effective_max_tokens": max_tokens})
+
+def run_signature(m, t, max_tokens, judge=None):
+    active_judge = judge if t.get("check", {}).get("type") == "judge" and judge and judge["name"] != m["name"] else None
+    return digest({"version": 2, "task": task_contract(t),
+                   "model": model_contract(m, max_tokens),
+                   "judge": (model_contract(active_judge, active_judge.get("max_tokens", max_tokens))
+                             if active_judge else None),
+                   "judge_prompt": JUDGE if active_judge else None})
+
+def arm_contract(m, t, max_tokens, judge=None):
+    """One arm across task checker types; keep the judge schedule in provenance.
+
+    Whether a *particular task* needs a judge belongs in run_signature, not
+    the arm key. Otherwise a mixed auto/judge taskset creates disjoint arms.
+    """
+    judge_for_arm = judge if judge and judge["name"] != m["name"] else None
+    return digest({"arm": model_contract(m, max_tokens),
+                   "judge": model_contract(judge_for_arm, judge_for_arm.get("max_tokens", max_tokens))
+                   if judge_for_arm else None, "judge_prompt": JUDGE if judge_for_arm else None})
 
 
 # ---------------------------------------------------------------- models
@@ -175,37 +211,59 @@ def auto_check(task, text):
 
 # ---------------------------------------------------------------- run
 async def run(a):
-    tasks, allm = jread(a.tasks), {m["name"]: m for m in json.load(open(a.models))}
+    tasks, model_list = jread(a.tasks), json.load(open(a.models))
+    for kind, ids in (("task", [t["id"] for t in tasks]), ("model", [m["name"] for m in model_list])):
+        if len(ids) != len(set(ids)):
+            sys.exit(f"duplicate {kind} id in input; refusing to pool distinct cells")
+    if not tasks or not model_list or a.k < 1 or a.max_tokens < 1:
+        sys.exit("tasks, models, k and max_tokens must be nonempty/positive")
+    allm = {m["name"]: m for m in model_list}
     models = [allm[n] for n in a.only.split(",")] if a.only else list(allm.values())
     J = allm[a.judge] if a.judge else None
     validate(models + ([J] if J else []))
-    done = {key(r) for r in jread(a.out) if "text" in r}
+    old_rows = jread(a.out)
+    expected_tasks = {t["id"]: task_contract(t) for t in tasks}
+    for r in old_rows:
+        if "text" in r and r.get("task") in expected_tasks and (r.get("contract_version") != 2
+                                                                  or r.get("ph") != expected_tasks[r["task"]]):
+            sys.exit(f"mixed task contract for {r['task']} in {a.out}; use a separate --out "
+                     "for changed prompts/checkers or legacy results before any provider calls")
+    done = {key(r) for r in old_rows if "text" in r}
     sem = {m["name"]: asyncio.Semaphore(m.get("conc", a.conc)) for m in models}
 
     async def one(t, m, s):
         chk = t.get("check", {"type": "human"})
-        r = dict(task=t["id"], lane=t["lane"], model=m["name"], effort=m["effort"], cfg=cfghash(m), sample=s,
-                 ph=phash(t), check=chk["type"], ts=time.time())
+        maximum = m.get("max_tokens", a.max_tokens)
+        active_judge = J if chk["type"] == "judge" and J and J["name"] != m["name"] else None
+        r = dict(task=t["id"], lane=t["lane"], model=m["name"], model_id=m["model"], effort=m["effort"],
+                 cfg=arm_contract(m, t, maximum, J), sig=run_signature(m, t, maximum, J),
+                 contract_version=2, sample=s, ph=task_contract(t), check=chk["type"], ts=time.time())
         try:
             async with sem[m["name"]]:
-                text, u, dt, tr = await call(m, t.get("system"), t["prompt"], m.get("max_tokens", a.max_tokens))
+                text, u, dt, tr = await call(m, t.get("system"), t["prompt"], maximum)
         except Exception as e:
             jadd(a.out, {**r, "error": repr(e)[:500]}); print(f"ERR {key(r)} {e!r}"[:240], file=sys.stderr); return
         r.update(text=text, usage=u, cost=cost(m, u), latency=round(dt, 2), truncated=tr, jcost=0.0)
         r["passed"] = await asyncio.to_thread(auto_check, t, text)
-        if chk["type"] == "judge" and J and J["name"] != m["name"]:
+        if chk["type"] == "judge":
+            r["judge_status"] = "pending"  # no usable grade until a real verdict or blind human grade
+        if active_judge:
             try:
                 jt, ju, _, _ = await call(J, None, JUDGE.format(p=t["prompt"], r=chk.get("rubric", ""), t=text), J.get("max_tokens", a.max_tokens))
                 v = re.findall(r"VERDICT:\s*(PASS|FAIL)", jt)
                 r["passed"], r["jcost"] = (v[-1] == "PASS") if v else None, cost(J, ju) or 0.0
+                r["judge_status"] = "graded" if v else "pending_invalid_verdict"
             except Exception as e:
+                r["judge_status"] = "pending_error"
                 print(f"JUDGE ERR {key(r)} {e!r}"[:240], file=sys.stderr)
         jadd(a.out, r)
         c = "?" if r["cost"] is None else f'{r["cost"]:.4f}'
         print(f'{key(r):<48} pass={r["passed"]!s:<5} ${c}{" TRUNC" if tr else ""}')
 
     jobs = [one(t, m, s) for t in tasks for m in models for s in range(a.k)
-            if f'{t["id"]}|{m["name"]}|{s}|{cfghash(m)}' not in done]
+            if key(dict(task=t["id"], model=m["name"], sample=s,
+                        cfg=arm_contract(m, t, m.get("max_tokens", a.max_tokens), J),
+                        sig=run_signature(m, t, m.get("max_tokens", a.max_tokens), J))) not in done]
     random.shuffle(jobs)
     print(f"{len(jobs)} cells to run ({len(done)} already done)")
     await asyncio.gather(*jobs)
@@ -216,6 +274,11 @@ def grade(a):
     tasks = {t["id"]: t for t in jread(a.tasks)}
     rows = jread(a.out)
     runs = {key(r): r for r in rows if "text" in r}
+    for r in runs.values():
+        t = tasks.get(r["task"])
+        expected = task_contract(t) if r.get("contract_version") == 2 else phash(t) if t else None
+        if t is None or r.get("ph") != expected:
+            sys.exit(f"mixed or stale task contract for {r['task']}: grade with the matching tasks.jsonl")
     graded = {r["grade_of"] for r in rows if "grade_of" in r}
     todo = [r for k, r in runs.items() if r["passed"] is None and k not in graded]
     aud = [r for k, r in runs.items() if r["passed"] is not None and k not in graded]
@@ -247,45 +310,89 @@ def boot_ci(per, B=2000, rng=random.Random(0)):
 def report(a):
     rows = jread(a.out)
     runs = {key(r): r for r in rows if "text" in r}
+    versions = {r.get("contract_version", 1) for r in runs.values()}
+    if len(versions) > 1 or versions - {1, 2}:
+        sys.exit("mixed contract versions in results; report legacy and v2 runs separately")
+    task_versions = defaultdict(set)
+    for r in runs.values():
+        task_versions[r["task"]].add(r.get("ph"))
+    mixed = [t for t, versions_for_task in task_versions.items() if len(versions_for_task) > 1]
+    if mixed:
+        sys.exit(f"mixed task prompt/checker versions in results: {', '.join(sorted(mixed))}; report separately")
+    taskset_path = Path(getattr(a, "tasks", ""))
+    declared = {}
+    if taskset_path.is_file():
+        for t in jread(taskset_path):
+            if not isinstance(t, dict) or not t.get("id") or not t.get("lane") or t["id"] in declared:
+                sys.exit(f"invalid/duplicate task id or lane in {taskset_path}")
+            declared[t["id"]] = t
+        for r in runs.values():
+            t = declared.get(r["task"])
+            contract = (task_contract(t) if r.get("contract_version") == 2 else phash(t)) if t else None
+            if t is None or t["lane"] != r["lane"] or r.get("ph") != contract:
+                sys.exit(f"task {r['task']}: results do not match declared --tasks file; report separately")
+    taskset_known = bool(declared)
+    if not taskset_known:
+        print("WARN no declared --tasks file: showing diagnostics only; no arm is routeable", file=sys.stderr)
     grades = {r["grade_of"]: r for r in rows if "grade_of" in r}
-    errs = defaultdict(int)
-    for r in rows:
-        if "error" in r and key(r) not in runs: errs[r["model"]] += 1
-    cells, phs, agree = defaultdict(lambda: defaultdict(list)), defaultdict(set), defaultdict(lambda: [0, 0])
+    cells, agree = defaultdict(lambda: defaultdict(list)), defaultdict(lambda: [0, 0])
     cfgs, eff = defaultdict(set), {}
     for r in runs.values(): cfgs[r["model"]].add(r.get("cfg", ""))
     for m, c in cfgs.items():
         if len(c) > 1: print(f"WARN model {m}: {len(c)} configs in results; reported separately as {m}#<cfg>", file=sys.stderr)
     arm = lambda r: r["model"] if len(cfgs[r["model"]]) == 1 else f'{r["model"]}#{r.get("cfg", "")[:6]}'
+    errs = defaultdict(int)
+    for r in rows:
+        if ("error" in r and key(r) not in runs and
+                r.get("cfg", "") in cfgs[r["model"]]):
+            errs[(r.get("lane"), arm(r))] += 1
     for k, r in runs.items():
         p, vs, g = r["passed"], 0.0, grades.get(k)
         if g and g["audit"]:
             agree[r["check"]][0] += g["passed"] == p; agree[r["check"]][1] += 1
         elif g:
             p, vs = g["passed"], g["verify_s"]
-        phs[r["task"]].add(r["ph"]); eff[arm(r)] = r.get("effort", "?")
+        eff[arm(r)] = r.get("effort", "?")
         cells[(r["lane"], arm(r))][r["task"]].append(
             dict(p=p, c=r["cost"], j=r["jcost"], v=vs, out=(r["usage"] or {}).get("out"), lat=r["latency"], tr=r.get("truncated")))
 
+    # The independent taskset comes from the declared task file, not just the
+    # cells reached by at least one arm. A missing task, sample, or grade makes
+    # an arm incomplete; without that file all rows are diagnostics only.
+    lane_tasks = defaultdict(set)
+    if taskset_known:
+        for t in declared.values():
+            lane_tasks[t["lane"]].add(t["id"])
+    else:
+        for (lane, _), task_rows in cells.items():
+            lane_tasks[lane].update(task_rows)
+    expected_k = getattr(a, "k", None) or max(
+        (len(v) for task_rows in cells.values() for v in task_rows.values()), default=1)
     stats = []
     for (lane, mod), T in cells.items():
         xs = [x for v in T.values() for x in v]
         g = [x for x in xs if x["p"] is not None]
         per = {t: [x["p"] for x in v if x["p"] is not None] for t, v in T.items()}
         per = {t: v for t, v in per.items() if v}
+        tasks_in_lane = lane_tasks[lane]
+        complete = (taskset_known and set(T) == tasks_in_lane and errs[(lane, mod)] == 0
+                    and all(len(T[t]) == expected_k and all(x["p"] is not None for x in T[t])
+                            for t in tasks_in_lane))
         P = sum(sum(v) for v in per.values())
-        api = sum((x["c"] or 0) + x["j"] for x in g); hrs = sum(x["v"] for x in g) / 3600
+        api = sum((x["c"] or 0) + (x["j"] or 0) for x in xs)
+        hrs = sum(x["v"] for x in g) / 3600
         lo, hi = boot_ci(per)
         outs = [x["out"] for x in xs if x["out"] is not None]
         stats.append(dict(
             lane=lane, model=mod, effort=eff.get(mod, "?"), n=len(g), pend=len(xs) - len(g), trunc=sum(bool(x["tr"]) for x in xs),
-            err=errs[mod], pass_=pass_rate(list(per.values())), lo=lo, hi=hi,
-            cov=sum(any(v) for v in per.values()) / len(per) if per else NAN,
-            passk=sum(all(v) for v in per.values()) / len(per) if per else NAN,
-            try_usd=api / len(g) if g else NAN, succ_usd=api / P if P else INF,
+            err=errs[(lane, mod)], complete=complete, expected=len(tasks_in_lane) * expected_k,
+            pass_=pass_rate(list(per.values())), lo=lo, hi=hi,
+            cov=sum(bool(per.get(t)) and any(per[t]) for t in tasks_in_lane) / len(tasks_in_lane) if tasks_in_lane else NAN,
+            passk=sum(len(per.get(t, [])) == expected_k and all(per[t]) for t in tasks_in_lane) / len(tasks_in_lane) if tasks_in_lane else NAN,
+            try_usd=api / len(xs) if xs else NAN, succ_usd=api / P if P else INF,
             vmin=hrs * 60 / len(g) if g else NAN,
             allin=(api + hrs * a.usd_per_hour) / P if P else INF,
-            known=all(x["c"] is not None for x in g),
+            known=all(x["c"] is not None for x in xs),
             med_out=statistics.median(outs) if outs else NAN,
             p50s=statistics.median([x["lat"] for x in xs])))
 
@@ -293,23 +400,24 @@ def report(a):
            f'{"$/try":>9}{"$/succ":>9}{"vmin":>6}{"all-in$/s":>10}{"med_out":>8}{"p50s":>6}')
     for lane in sorted({s["lane"] for s in stats}):
         L = [s for s in stats if s["lane"] == lane]
-        bc = max((s["cov"] for s in L if not math.isnan(s["cov"])), default=NAN)
-        elig = [s for s in L if s["cov"] >= bc - a.tol and s["allin"] < INF]
+        comparable = [s for s in L if s["complete"] and s["known"] and s["n"] > 0]
+        bc = max((s["cov"] for s in comparable if not math.isnan(s["cov"])), default=NAN)
+        elig = [s for s in comparable if s["cov"] >= bc - a.tol and s["allin"] < INF]
         route = min(elig, key=lambda s: s["allin"])["model"] if elig else None
-        front = {s["model"] for s in L if not any(
+        front = {s["model"] for s in comparable if not any(
             o["allin"] <= s["allin"] and o["pass_"] >= s["pass_"] and (o["allin"] < s["allin"] or o["pass_"] > s["pass_"])
-            for o in L)}
+            for o in comparable)}
         print(f"\nlane: {lane}   (route -> {route}; * = pareto on all-in$/succ vs pass)\n{hdr}")
         for s in sorted(L, key=lambda s: s["allin"]):
             q = "" if s["known"] else "?"
             flags = "".join([f" trunc={s['trunc']}" if s["trunc"] else "", f" err={s['err']}" if s["err"] else "",
+                             f" incomplete ({s['n']}/{s['expected']} graded)" if not s["complete"] else "",
                              "  <- route" if s["model"] == route else ""])
             print(f'{"*" if s["model"] in front else " "} {s["model"]:<22}{s["effort"]:<8}{s["n"]:>4}{s["pend"]:>5}  '
                   f'{s["pass_"]:.2f} [{s["lo"]:.2f},{s["hi"]:.2f}]  {s["cov"]:>5.2f}{s["passk"]:>7.2f}'
                   f'{s["try_usd"]:>9.4f}{q}{s["succ_usd"]:>9.4f}{q}{s["vmin"]:>6.2f}{s["allin"]:>10.4f}{q}'
                   f'{s["med_out"]:>8.0f}{s["p50s"]:>6.1f}{flags}')
-    for t, h in phs.items():
-        if len(h) > 1: print(f"WARN task {t}: {len(h)} prompt versions in results", file=sys.stderr)
+
     for ck, (ok, n) in agree.items():
         print(f"checker audit [{ck}]: human agrees {ok}/{n} ({ok / n:.0%})")
     if a.csv:

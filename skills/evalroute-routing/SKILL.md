@@ -25,20 +25,25 @@ work. The card prints this as its `next:` line so nobody has to remember it:
 2. **Check the lane before doing anything.** The card says which layer
    decided (`rules match` / `LLM fallback` / `defaulted`). If the lane is
    wrong, fix it NOW with `/route --lane <lane-id> <same task>` — the
-   reroute re-logs the assignment and `/rate` attributes to the LAST route.
+   reroute logs a correction and consumes the previous pending route when
+   the task text matches. The new card prints its route ID.
 3. **Set the arm: `/model <model>`** from the card's `run:` line. If
-   `install-routes` was run (per-model efforts in
-   `agent.reasoning_overrides`), effort follows automatically; otherwise
-   also `/reasoning <effort>`. Do it before turn 1 — mid-session switches
+   `install-routes` wrote an override matching THIS lane, effort follows;
+   otherwise follow the card's `next:` line and run `/reasoning <effort>`.
+   Shared-model lanes can need lower effort than the installed maximum.
+   Do it before turn 1 — mid-session switches
    re-read the whole context at full input price.
-4. **After the work, `/rate pass|fail [--lane <id>] [--note why]`** — one
+4. **After the work, `/rate pass|fail [--route-id <id>] [--lane <id>] [--note why]`** — one
    word labels the outcome; the note is the diagnosis. `--lane` files a
    correction if the route was wrong. From the terminal:
    `hermes evalroute rate pass --note ...`.
 
 Steps 1 and 4 are where the data comes from: routes that are never rated
-teach the table nothing. The flywheel correlates /rate with the last route
-in the session and the model that actually served the turns.
+teach the table nothing. The ledger is profile-wide, not session-specific;
+without `--route-id`, `/rate` consumes the latest pending route. Check the
+card's ID and confirmation before relying on a label. Command hooks do not
+provide a reliable route/session join, so process-global switch observations
+are not proof of the model that actually served the rated task.
 
 ## Procedure notes
 
@@ -47,7 +52,7 @@ The workflow above is the spine; these are the details that bite:
 - **The classifier is two-layer.** Strong keyword rules are trusted outright;
   weak signal escalates to one small LLM call, and the card says which layer
   decided (`rules match` / `LLM fallback` / `defaulted`). "Free, no API calls"
-  only holds for the rules-strong path.
+  only holds for the rules-strong path; weak routing spends host-model tokens.
 - **Run `/route` BEFORE the work starts.** The plugin cannot switch the model
   for you: say `/model <model>` out loud (or run it yourself if the user
   asks). Switching before turn 1 is free; mid-session switches re-read the
@@ -70,7 +75,8 @@ The workflow above is the spine; these are the details that bite:
   `hermes -c`, else paste the final turn as the new session's opener. Never
   re-route the continuation (it displaces the pending row); `/rate` once at
   the end with the cross-session fact in the note. A different task in the
-  new session? `/rate skip` clears the pending row first. Steering is part
+  new session? `/rate skip --route-id <id>` clears your pending row first.
+  Steering is part
   of the observed layer — the note carries the methodology, not the verdict.
 
 ## Updating the table

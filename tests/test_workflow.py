@@ -24,23 +24,27 @@ def test_card_footer_present():
 
 def test_card_footer_mentions_reasoning_when_no_overrides(home, monkeypatch):
     # no install-routes on record -> footer includes the /reasoning step
-    monkeypatch.setattr(tools, "_effort_auto", lambda: False)
+    monkeypatch.setattr(tools, "_effort_auto", lambda lane: False)
     lane = tools._lane_by_id("dl-ml-research-engineering")
     card = tools.route_card(lane, 0.8, [], method="llm")
     assert "/reasoning high" in card
 
 
-def test_card_footer_skips_reasoning_when_overrides(home, monkeypatch):
-    # install-routes wrote per-model efforts -> /reasoning step not needed
-    monkeypatch.setattr(tools, "_effort_auto", lambda: True)
+def test_card_footer_skips_reasoning_when_overrides(home):
+    (home / "config.yaml").write_text("agent:\n  reasoning_overrides:\n    z-ai/glm-5.3: high\n")
     lane = tools._lane_by_id("dl-ml-research-engineering")
     card = tools.route_card(lane, 0.8, [], method="llm")
     assert "/reasoning" not in card
 
 
 def test_effort_auto_reads_config(home):
-    # real config has reasoning_overrides (install-routes ran) -> True
-    assert tools._effort_auto() is True or tools._effort_auto() is False
+    lane = tools._lane_by_id("dl-ml-research-engineering")
+    assert tools._effort_auto(lane) is False
+    (home / "config.yaml").write_text("agent:\n  reasoning_overrides:\n    z-ai/glm-5.3: max\n")
+    assert tools._effort_auto(lane) is False
+    assert "/reasoning high" in tools.route_card(lane, 1, [], pinned=True)
+    (home / "config.yaml").write_text("agent:\n  reasoning_overrides:\n    z-ai/glm-5.3: high\n")
+    assert tools._effort_auto(lane) is True
 
 
 # ------------------------------------------------------------- CLI wiring

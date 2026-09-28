@@ -1,18 +1,21 @@
-# Submitted to NousResearch/hermes-agent as plugin-catalog/evalroute.yaml.
-# Kept here so the reviewed pin sits next to the code it pins; the copy in
-# plugin-catalog/ is the one that installs.
+# Draft of the plugin-catalog/evalroute.yaml entry (not yet submitted to
+# NousResearch/hermes-agent). Kept here so the reviewed pin sits next to the
+# code it pins; the copy in plugin-catalog/ is the one that installs.
+# `sha` still points at the last tagged release; re-pin it with
+# `git rev-parse v<version>^{commit}` in the commit after tagging, never by hand.
 name: evalroute
 repo: https://github.com/keppy/hermes-plugin-evalroute
 sha: b45f1362b1de2813087fd8f7f3d8bf34e1e64abc
 description: Route a task to the right (model, reasoning effort) arm before you start.
   Classifies the task into a lane, prints a provenance-carrying route card, and installs
-  per-model reasoning-effort defaults so /model carries the lane's effort. Local only -
-  no network, no credentials, nothing paid.
+  per-model reasoning-effort defaults. Strong rules run locally; weak-signal
+  classification calls the host LLM and consumes tokens. The separate harness
+  and shim can make paid provider calls when explicitly run; no plugin-owned credentials.
 maintainer: keppy
 tier: community
 category: tools
 requires_hermes: ">=0.21"
-version: "0.3.2"
+version: "0.3.3"
 docs_url: https://github.com/keppy/hermes-plugin-evalroute#readme
 capabilities:
   provides_tools:

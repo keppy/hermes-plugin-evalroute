@@ -11,8 +11,18 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+@pytest.fixture(autouse=True)
+def isolated_hermes_home(tmp_path, monkeypatch):
+    """No test may read or write the user's live profile or labels."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    import flywheel
+    flywheel._MEMORY.clear()
+    yield
+    flywheel._MEMORY.clear()

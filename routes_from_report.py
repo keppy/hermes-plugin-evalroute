@@ -28,6 +28,7 @@ import argparse
 import csv
 import datetime
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -35,12 +36,12 @@ from pathlib import Path
 import yaml
 
 # Columns hermes evalroute report --csv writes (see evalroute.py report()):
-# lane, model, effort, n, pend, trunc, err, pass_, lo, hi, cov, passk,
-# try_usd, succ_usd, vmin, allin, known, med_out, p50s
+# lane, model, effort, n, pend, trunc, err, complete, expected, pass_,
+# lo, hi, cov, passk, try_usd, succ_usd, vmin, allin, known, med_out, p50s
 
-FIELDNAMES = ["lane", "model", "effort", "n", "pend", "trunc", "err", "pass_",
-              "lo", "hi", "cov", "passk", "try_usd", "succ_usd", "vmin",
-              "allin", "known", "med_out", "p50s"]
+FIELDNAMES = ["lane", "model", "effort", "n", "pend", "trunc", "err", "complete",
+              "expected", "pass_", "lo", "hi", "cov", "passk", "try_usd",
+              "succ_usd", "vmin", "allin", "known", "med_out", "p50s"]
 
 # CSV lane names (evalroute task "lane" strings) -> routes.yaml lane ids.
 # Keep this mapping the single spelling authority between harness and plugin.
@@ -92,12 +93,34 @@ def load_model_ids(models_path: Path | None) -> dict[str, str]:
 
     The models.json used by the run is the authority; without it, arm names
     pass through unchanged (flagged in provenance as unverified ids)."""
-    if not models_path or not models_path.exists():
+    if models_path is None:
         return {}
+    if not models_path.exists():
+        raise ValueError(f"models file not found: {models_path}")
     out: dict[str, str] = {}
-    for m in json.load(open(models_path, encoding="utf-8")):
-        out[m["name"]] = m.get("model", m["name"])
+    with models_path.open(encoding="utf-8") as f:
+        models = json.load(f)
+    if not isinstance(models, list):
+        raise ValueError("models file must be a JSON list")
+    for m in models:
+        name, model = m.get("name"), m.get("model")
+        if not name or not model or name in out:
+            raise ValueError(f"missing/duplicate model name or id: {m}")
+        _validate_model_id(model)
+        out[name] = model
     return out
+
+
+def _validate_model_id(model: str) -> None:
+    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", model):
+        raise ValueError(f"invalid model id {model!r}; supply a routable /model id via --models")
+
+
+def _routeable_row(row: dict) -> bool:
+    """Exclude incomplete or unknown-cost arms from generated routes."""
+    return (int(row.get("n", 0) or 0) > 0
+            and str(row.get("complete", "True")).lower() == "true"
+            and str(row.get("known", "True")).lower() == "true")
 
 
 def load_report(csv_path: Path) -> dict[str, dict]:
@@ -114,7 +137,8 @@ def load_report(csv_path: Path) -> dict[str, dict]:
             r["n_i"] = int(r["n"] or 0)
         except (ValueError, KeyError):
             continue
-        lanes[r["lane"]].append(r)
+        if _routeable_row(r):
+            lanes[r["lane"]].append(r)
 
     winners: dict[str, dict] = {}
     for lane, lrows in lanes.items():
@@ -127,13 +151,22 @@ def load_report(csv_path: Path) -> dict[str, dict]:
 
 
 def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
-             models_path: Path | None = None, k: int = 1,
+             models_path: Path | None = None, k: int = 3,
              runs_path: Path | None = None) -> int:
+    if k < 1:
+        raise ValueError("samples per task (--k) must be positive")
+    if runs_path is not None and not runs_path.exists():
+        raise ValueError(f"runs file not found: {runs_path}")
     existing: dict[str, dict] = {}
     if existing_path and existing_path.exists():
         raw = yaml.safe_load(existing_path.read_text(encoding="utf-8")) or {}
         existing = {l["id"]: l for l in (raw.get("lanes") or []) if isinstance(l, dict) and l.get("id")}
 
+    with csv_path.open(encoding="utf-8", newline="") as f:
+        columns = csv.DictReader(f).fieldnames or []
+    if not {"complete", "expected", "known"}.issubset(columns):
+        raise ValueError("legacy report CSV lacks completeness evidence; regenerate it "
+                         "with the current harness from the original runs")
     model_ids = load_model_ids(models_path)
     winners = load_report(csv_path)
     if not winners:
@@ -142,7 +175,8 @@ def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
 
     # gonogo adjudication: winner vs runner-up per lane, from the raw runs.
     stamps: dict[str, str] = {}
-    if runs_path and runs_path.exists():
+    runs: list[dict] = []
+    if runs_path:
         import json
         try:
             from . import adjudicate
@@ -157,7 +191,8 @@ def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
                 r["allin_f"] = float(r["allin"]) if r["allin"] not in ("", "inf") else float("inf")
             except (ValueError, KeyError):
                 continue
-            by_lane[r["lane"]].append(r)
+            if _routeable_row(r):
+                by_lane[r["lane"]].append(r)
         for lane_name, lrows in by_lane.items():
             lane_id = _slug(lane_name)
             if lane_name not in winners:  # winners keyed by CSV lane name
@@ -179,13 +214,55 @@ def generate(csv_path: Path, out_path: Path, existing_path: Path | None,
     for lane_name in sorted(winners):
         stats = winners[lane_name]
         stats["k"] = k
-        stats["n_tasks"] = max(1, round(stats["n_i"] / k)) if k > 1 else stats["n_i"]
+        if stats["n_i"] <= 0 or stats["n_i"] % k:
+            raise ValueError(f"{lane_name}: sample count n={stats['n_i']} is not a positive multiple "
+                             f"of --k {k}; cannot claim an exact task count")
+        stats["n_tasks"] = stats["n_i"] // k
+        if runs_path:
+            # CSV n counts graded samples. Confirm the raw winner has exactly
+            # k distinct graded sample IDs for every actual task, not merely
+            # an aggregate count divisible by k.
+            def _run_key(r):
+                base = f'{r["task"]}|{r["model"]}|{r["sample"]}|{r.get("cfg", "")}'
+                return base + (f'|{r["sig"]}' if r.get("sig") else "")
+            grades = {r["grade_of"] for r in runs if "grade_of" in r}
+            arm_name = stats["model"].split("#", 1)[0]
+            cfg_prefix = stats["model"].split("#", 1)[1] if "#" in stats["model"] else None
+            per_task: dict[str, set[int]] = defaultdict(set)
+            matching_cfgs: set[str] = set()
+            recorded_model_ids: set[str] = set()
+            for r in runs:
+                if ("text" not in r or r.get("lane") != lane_name or r.get("model") != arm_name
+                        or (cfg_prefix is not None and not r.get("cfg", "").startswith(cfg_prefix))):
+                    continue
+                matching_cfgs.add(r.get("cfg", ""))
+                if r.get("model_id"):
+                    recorded_model_ids.add(r["model_id"])
+                if r.get("passed") is not None or _run_key(r) in grades:
+                    per_task[r["task"]].add(r["sample"])
+            if cfg_prefix and len(matching_cfgs) != 1:
+                raise ValueError(f"{lane_name}: cfg prefix {cfg_prefix!r} matches {len(matching_cfgs)} configurations")
+            if (len(per_task) != stats["n_tasks"] or
+                    any(samples != set(range(k)) for samples in per_task.values())):
+                raise ValueError(f"{lane_name}: winner {stats['model']} has {stats['n_i']} graded "
+                                 "samples in CSV but runs do not show exactly --k per task")
         lane_id = _slug(lane_name)
         if lane_id in seen_ids:
             continue
         seen_ids.add(lane_id)
-        model_id = model_ids.get(stats["model"], stats["model"])
+        base_arm = stats["model"].split("#", 1)[0]
+        if models_path and base_arm not in model_ids:
+            raise ValueError(f"{lane_name}: no model id for winning arm {base_arm!r} in {models_path}")
+        model_id = model_ids.get(base_arm, base_arm)
+        _validate_model_id(model_id)
+        if runs_path and recorded_model_ids and recorded_model_ids != {model_id}:
+            raise ValueError(f"{lane_name}: --models id {model_id!r} disagrees with winner's recorded "
+                             f"model id(s) {sorted(recorded_model_ids)}")
         row = _route_row(lane_id, stats, date, model_id)
+        if models_path is None:
+            row["provenance"] += "; model id unverified (no --models mapping)"
+        elif runs_path and not recorded_model_ids:
+            row["provenance"] += "; v1 runs omit model_id (mapped via models.json)"
         if lane_id in stamps:
             row["provenance"] = f'{row["provenance"]}; {stamps[lane_id]}'
         prev = existing.get(lane_id) or {}
@@ -227,7 +304,7 @@ def main(argv=None) -> int:
                     help="existing routes.yaml whose classifier fields/unmeasured rows are preserved")
     ap.add_argument("--models", default=None,
                     help="models.json used by the run; maps arm names -> routable model ids")
-    ap.add_argument("--k", type=int, default=1,
+    ap.add_argument("--k", type=int, default=3,
                     help="samples per task in the run; the CSV's n column counts samples, not tasks")
     ap.add_argument("--runs", default=None,
                     help="the run's runs.jsonl; enables gonogo adjudication of the "

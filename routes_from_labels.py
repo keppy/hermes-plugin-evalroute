@@ -9,9 +9,10 @@ WEAKER than the harness's `measured` rows:
 
 `merge_observed` applies observed rows to a routes.yaml ONLY where the lane
 has no measured row: observational data can contest a priors row, never
-overwrite a measured one. Escalation rates decide the recommended arm: if the
-recommended arm failed and the escalation passed, the route flips to the
-escalation with a note.
+overwrite a measured one. Unverified profile-wide switches are not arm
+attribution; only explicit user model+effort confirmation counts. A provisional
+prior-lane flip needs at least three failures on its arm and two wins on an
+alternative, and still requires a controlled paired check.
 
 Usage:
   python routes_from_labels.py                    # print per-lane stats
@@ -46,13 +47,17 @@ def aggregate(labels: list[dict[str, Any]], max_age_days: int = MAX_STALE_DAYS) 
                 and o.get("ts", 0) >= cutoff]
     corrections = [c for c in labels if c.get("kind") == "lane_correction"]
 
-    # index routes by recency for correlation: outcome -> most recent route at/before it
-    routes_sorted = sorted(routes, key=lambda r: r.get("ts", 0))
     lanes: dict[str, dict] = defaultdict(lambda: defaultdict(lambda: dict(attempts=0, passes=0,
                                                    fails=0, escalations=0)))
     for out in outcomes:
         lane = out.get("route_lane") or "(unknown)"
-        arm_key = f'{out.get("actual_model") or "?"}@{out.get("actual_effort") or "?"}'
+        # Process-global /model and /reasoning observations cannot be joined
+        # to a particular route/session. Only a user-confirmed pair is arm
+        # evidence; legacy rows without this provenance remain anonymous.
+        if out.get("arm_attribution") == "explicit_user" and out.get("actual_model") and out.get("actual_effort"):
+            arm_key = f'{out["actual_model"]}@{out["actual_effort"]}'
+        else:
+            arm_key = "?@?"
         arm = lanes[lane][arm_key]
         arm["attempts"] += 1
         if out.get("rated") == "pass":
@@ -109,7 +114,8 @@ def _observed_row(lane_id: str, stats: dict, prev: dict[str, Any], date: str) ->
     row["id"] = lane_id
     n = stats["outcomes"]
     pr = stats["pass_rate"]
-    row["provenance"] = f"observed {n} tasks, single-arm, pass {pr:.0%}, {date}"
+    row["provenance"] = (f"observed {n} outcomes, same-maintainer observational single-arm, "
+                         f"pass {pr:.0%}, {date}; not independent trials or a controlled comparison")
     # gonogo decide(): the honest verdict on what n can support, when available.
     try:
         from . import adjudicate
@@ -119,19 +125,21 @@ def _observed_row(lane_id: str, stats: dict, prev: dict[str, Any], date: str) ->
     verdict = adjudicate.observed_verdict(passes, n)
     if verdict:
         row["provenance"] = f'{row["provenance"]}; {verdict}'
-    # Escalation flip: recommended arm failing while an escalation-tier model
-    # passed is the one observational signal strong enough to move the route.
+    # A tiny, same-maintainer stream is not a controlled experiment. Only
+    # propose a provisional change after repeated failures and repeated wins;
+    # never allow two failures and one pass to masquerade as a comparison.
     prev_model = prev.get("model") if prev else None
     if prev_model:
         rec_arm = stats["arms"].get(f'{prev_model}@{prev.get("effort", "medium")}')
-        if rec_arm and rec_arm["attempts"] >= 2 and rec_arm["passes"] == 0:
+        if rec_arm and rec_arm["attempts"] >= 3 and rec_arm["passes"] == 0:
             passing = [(k, a) for k, a in stats["arms"].items()
-                       if a["passes"] > 0 and not k.startswith(f"{prev_model}@")]
+                       if a["passes"] >= 2 and not k.startswith(f"{prev_model}@")]
             if passing:
                 best_k, best_a = max(passing, key=lambda ka: ka[1]["passes"])
                 row["model"], row["effort"] = best_k.split("@", 1)
-                row["notes"] = (f"observed flip: {prev_model} failed {rec_arm['attempts']}x "
-                                f"while {best_k} passed; single-arm evidence, verify")
+                row["notes"] = (f"provisional observed flip: {prev_model} failed {rec_arm['attempts']}x "
+                                f"while {best_k} passed {best_a['passes']}x; same-maintainer, "
+                                "non-randomized evidence; verify in a controlled paired batch")
     return row
 
 
@@ -198,7 +206,7 @@ def main(argv=None) -> int:
                                            sort_keys=False, allow_unicode=True),
                             encoding="utf-8")
         print(f"\nwrote {out_path}: {applied} observed rows applied "
-              "(measured rows untouched; priors rows contested only)")
+              "(measured rows untouched; priors rows contested only; provisional flips need review)")
     return 0
 
 

@@ -2,13 +2,13 @@
 
 Registers one model-facing tool (``evalroute_route``), one slash command
 (``/route``), one CLI subcommand (``hermes evalroute``), and a bundled skill.
-Everything is local file math over ``data/routes.yaml``: no network calls, no
-credentials, nothing paid. The two-step procedure the route table encodes:
+Strong keyword classifications read local ``data/routes.yaml``. Weak
+signals may use the host LLM and cost tokens; the separate harness may make
+paid provider calls when deliberately invoked. The route table encodes:
 
-1. lane -> model          ("best open weight tier per lane")
-2. lane -> effort         ("starting settings to test"; ``install-routes``
-                           writes this half into ``agent.reasoning_overrides``
-                           so ``/model`` carries it)
+1. lane -> model          (measured where available; priors otherwise)
+2. lane -> effort         (``install-routes`` sets one default per model;
+                           a card adds ``/reasoning`` when its lane differs)
 """
 
 from __future__ import annotations

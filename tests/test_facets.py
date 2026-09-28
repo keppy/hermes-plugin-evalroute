@@ -34,11 +34,8 @@ def test_normalize_facets_drops_unknown():
 def test_facet_dominance_rules():
     assert tools.facet_dominance([]) == ""
     assert tools.facet_dominance(["long-doc"]) == ""
-    # domain + input-shape: domain drives
-    assert "domain" in tools.facet_dominance(["long-doc", "domain-dlml"])
-    # tier + domain: both named
-    d = tools.facet_dominance(["tier-hard", "domain-dlml"])
-    assert "tier" in d and "domain" in d
+    assert tools.facet_dominance(["long-doc", "domain-dlml"]) == "descriptive conjunction; lane chooses arm"
+    assert tools.facet_dominance(["tier-hard", "domain-dlml"]) == "descriptive conjunction; lane chooses arm"
 
 
 def test_route_full_returns_facets():
@@ -48,13 +45,20 @@ def test_route_full_returns_facets():
     # the task claims both long-doc reading AND dl-ml domain
     assert "long-doc" in facets or "domain-dlml" in facets
 
+def test_llm_lane_overrides_weak_rule_facets(monkeypatch):
+    monkeypatch.setattr(tools, "_llm_fallback", lambda task, lanes:
+                        (tools._lane_by_id("prose"), .9, []))
+    lane, _, _, method, facets = tools.route_full("a proof of concept")
+    assert method == "llm" and lane["id"] == "prose"
+    assert facets == ["domain-prose"]
+
 
 def test_route_card_shows_conjunction():
     lane = tools._lane_by_id("dl-ml-research-engineering")
     card = tools.route_card(lane, 0.8, ["rl"], method="llm",
                             facets=["long-doc", "domain-dlml"])
     assert "facets: long-doc + domain-dlml" in card
-    assert "conjunctive" in card
+    assert "descriptive conjunction; lane chooses arm" in card
 
 
 def test_route_card_single_facet():

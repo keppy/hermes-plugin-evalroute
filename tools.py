@@ -1,10 +1,8 @@
 """Handlers for the evalroute plugin.
 
-Everything here is local file math over ``data/routes.yaml``: no network, no
-credentials, no paid path. The two paid things this plugin could do — the
-evalroute harness itself and the Hermes shim — stay out of the Hermes venv
-(point ``EVALROUTE_PYTHON`` at the harness's own environment and run it via
-the terminal; see the bundled skill).
+Strong-rule classification is local; weak-signal classification can call the
+host LLM (token cost). The separately invoked harness and shim can make paid
+provider calls; neither runs as a side effect of importing this module.
 """
 
 from __future__ import annotations
@@ -86,14 +84,11 @@ def _hit(keyword: str, text: str) -> bool:
     kw = _norm(keyword)
     if not kw:
         return False
-    m = re.search(rf"(?:^| )({re.escape(kw)})(?: |$)", text)
-    if m is None:
-        return False
-    # Words before the hit, up to the negation window.
-    before = text[:m.start()].split()
-    if any(w in _NEGATION_CUES for w in before[-_NEG_WINDOW:]):
-        return False
-    return True
+    for m in re.finditer(rf"(?<!\S){re.escape(kw)}(?!\S)", text):
+        before = text[:m.start()].split()
+        if not any(w in _NEGATION_CUES for w in before[-_NEG_WINDOW:]):
+            return True
+    return False
 
 
 def _lane_by_id(lane_id: str) -> dict[str, Any] | None:
@@ -161,21 +156,10 @@ def normalize_facets(raw: list[str]) -> list[str]:
 
 
 def facet_dominance(facet_ids: list[str]) -> str:
-    """Which facet drives the arm, and why — the conjunctive composition rule.
-
-    Domain beats input-shape (judgment is the scarcer resource; input handling
-    is what flash-class models are FOR), demand-tier beats both when the task
-    is judgment-heavy. With <=1 facet, the lane alone decided; return ''.
-    """
+    """Describe coexistence, not an unimplemented arm precedence rule."""
     if len(facet_ids) <= 1:
         return ""
-    axis_of = {f["id"]: f["axis"] for f in _load_facets()}
-    axes = {axis_of.get(fid, "") for fid in facet_ids}
-    if "demand-tier" in axes and "domain" in axes:
-        return "tier + domain drive the arm; input-shape rides along"
-    if "domain" in axes:
-        return "domain drives the arm; input-shape rides along"
-    return "most demanding facet drives the arm"
+    return "descriptive conjunction; lane chooses arm"
 
 
 def _llm_fallback(task: str, lanes: list[dict[str, Any]]
@@ -224,8 +208,8 @@ def route_full(task: str) -> tuple[dict[str, Any], float, list[str], str, list[s
 
     Facets come from the same evidence as the lane: rules path derives them
     from the lanes that drew hits (any lane with a hit is a facet claim);
-    LLM path takes the classifier's facet list. Unknown/empty -> the winning
-    lane's own facets only, so the label never silently loses a dimension.
+    LLM path takes the classifier's facet list. Empty -> the winning LLM
+    lane's facets, never facets inferred from the weak rule it overrode.
     """
     lanes = _load_routes()
     lane, conf, hits = classify(task)
@@ -236,7 +220,7 @@ def route_full(task: str) -> tuple[dict[str, Any], float, list[str], str, list[s
         return lane, conf, hits, "rules-strong", facets
     llm_lane, llm_conf, llm_facets = _llm_fallback(task, lanes)
     if llm_lane is not None:
-        return llm_lane, llm_conf, hits, "llm", (llm_facets or facets)
+        return llm_lane, llm_conf, hits, "llm", (llm_facets or facets_for_hits([llm_lane["id"]]))
     if hits:
         return lane, conf, hits, "rules-weak", facets
     return lane, conf, hits, "default", facets
@@ -287,15 +271,14 @@ def classify(task: str) -> tuple[dict[str, Any], float, list[str]]:
 
 def route_card(lane: dict[str, Any], conf: float, hits: list[str],
                pinned: bool = False, method: str = "rules",
-               facets: list[str] | None = None) -> str:
+               facets: list[str] | None = None, route_id: str | None = None) -> str:
     """Render the human-readable route card."""
     lines = [
         f"lane: {lane['label']} ({lane['id']})",
         f"route: {lane['model']} @ {lane['effort']}   <- run: /model {lane['model']}",
     ]
     if facets and len(facets) > 1:
-        dom = facet_dominance(facets)
-        lines.append(f"facets: {' + '.join(facets)} (conjunctive — {dom})")
+        lines.append(f"facets: {' + '.join(facets)} (descriptive conjunction; lane chooses arm)")
     elif facets:
         lines.append(f"facets: {facets[0]}")
     if lane.get("escalation"):
@@ -316,30 +299,36 @@ def route_card(lane: dict[str, Any], conf: float, hits: list[str],
     if lane.get("notes"):
         lines.append(f"note: {lane['notes']}")
     lines.append(f"why here: {lane.get('match_hint', '')}")
+    if route_id:
+        lines.append(f"route id: {route_id} (use /rate pass|fail --route-id {route_id} if routes overlap)")
     # Workflow footer: the card answers "what arm?", the footer answers
     # "what now?". Wrong lane -> fix it now (a --lane reroute re-logs the
     # assignment; /rate attributes to the LAST route on file).
     lines.append(f"next: /model {lane['model']}"
-                 + (" then /reasoning " + lane["effort"] if not _effort_auto() else "")
+                 + (" then /reasoning " + _effort_for_override(lane) if not _effort_auto(lane) else "")
                  + " | wrong lane? /route --lane <id> <same task>"
                  " | when done: /rate pass|fail --note why")
     return "\n".join(lines)
 
 
-def _effort_auto() -> bool:
-    """True when install-routes wrote per-model efforts (so the card can
-    skip the /reasoning step). Best-effort: checks the live config."""
+def _effort_auto(lane: dict[str, Any]) -> bool:
+    """Only omit /reasoning when the active profile's model override matches.
+
+    Another lane can share the model but need a lower effort. In that case
+    /model applies the higher installed override, so an explicit command is
+    required to reach this card's arm. Never write the config from a card.
+    """
     try:
-        import hermes_constants  # noqa: F401  (available inside the host)
-        _ro = (Path.home() / "AppData" / "Local" / "hermes" / "config.yaml")
-        text = _ro.read_text(encoding="utf-8")
-        return "reasoning_overrides" in text
+        from hermes_constants import get_hermes_home
+        config = yaml.safe_load((Path(get_hermes_home()) / "config.yaml").read_text(encoding="utf-8")) or {}
+        overrides = (config.get("agent") or {}).get("reasoning_overrides") or {}
+        return isinstance(overrides, dict) and overrides.get(lane["model"]) == _effort_for_override(lane)
     except Exception:
         return False
 
 
 def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool,
-                 method: str = "rules") -> str:
+                 method: str = "rules", route_id: str | None = None) -> str:
     """JSON envelope for the model-facing tool: card for the human, fields for the agent."""
     return json.dumps({
         "lane": lane["id"],
@@ -350,9 +339,27 @@ def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool,
         "confidence": round(conf, 2),
         "classification_method": method,
         "pinned": pinned,
+        "route_id": route_id,
         "provenance": lane.get("provenance", ""),
         "card": card,
     }, ensure_ascii=False)
+
+
+def _note_route(task: str, lane: dict[str, Any], method: str, conf: float,
+                facets: list[str] | None = None, replace_route_id: str = "") -> str | None:
+    """Best-effort logging; explicit replacements fail rather than disappearing."""
+    try:
+        try:
+            from . import flywheel as fw
+        except ImportError:
+            import flywheel as fw  # type: ignore
+        return fw.note_route(task, lane, method, conf, facets=facets,
+                             replace_route_id=replace_route_id)
+    except Exception as exc:
+        if replace_route_id:
+            raise
+        logger.warning("evalroute label append failed: %s", exc)
+        return None
 
 
 def evalroute_route(args: dict[str, Any], **_) -> str:
@@ -362,21 +369,21 @@ def evalroute_route(args: dict[str, Any], **_) -> str:
         if not task:
             return json.dumps({"error": "task is required: a short description of the work"})
         lane_id = (args.get("lane") or "").strip()
+        replace_id = (args.get("replace_route_id") or "").strip()
+        if replace_id and not lane_id:
+            return json.dumps({"error": "replace_route_id requires a pinned lane"})
         if lane_id:
             lane = _lane_by_id(lane_id)
             if lane is None:
                 known = ", ".join(l["id"] for l in _load_routes())
                 return json.dumps({"error": f"unknown lane {lane_id!r}; known lanes: {known}"})
-            card = route_card(lane, 1.0, [], pinned=True)
-            return _tool_result(card, lane, 1.0, pinned=True, method="pinned")
+            route_id = _note_route(task, lane, "pinned", 1.0, replace_route_id=replace_id)
+            card = route_card(lane, 1.0, [], pinned=True, route_id=route_id)
+            return _tool_result(card, lane, 1.0, pinned=True, method="pinned", route_id=route_id)
         lane, conf, hits, method, facets = route_full(task)
-        try:  # flywheel label; logging must never break the card
-            from . import flywheel as _fw
-            _fw.note_route(task, lane, method, conf, facets=facets)
-        except Exception:
-            pass
-        return _tool_result(route_card(lane, conf, hits, method=method, facets=facets),
-                            lane, conf, pinned=False, method=method)
+        route_id = _note_route(task, lane, method, conf, facets=facets)
+        return _tool_result(route_card(lane, conf, hits, method=method, facets=facets, route_id=route_id),
+                            lane, conf, pinned=False, method=method, route_id=route_id)
     except Exception as exc:  # route table broken -> actionable error, not a crash
         return json.dumps({"error": f"evalroute: {exc}"})
 
@@ -386,25 +393,28 @@ def evalroute_route(args: dict[str, Any], **_) -> str:
 def _card_for_args(raw_args: str) -> str:
     """Shared body for /route and `hermes evalroute route`."""
     parts = (raw_args or "").split()
-    lane_id = ""
+    lane_id = replace_id = ""
     task = (raw_args or "").strip()
     if parts and parts[0] == "--lane":
         if len(parts) < 3:
-            raise ValueError("usage: route [--lane <lane-id>] <task description>")
-        lane_id, task = parts[1], " ".join(parts[2:])
+            raise ValueError("usage: route [--lane <lane-id> [--replace-route-id <id>]] <task description>")
+        lane_id = parts[1]
+        rest = parts[2:]
+        if rest and rest[0] == "--replace-route-id":
+            if len(rest) < 3:
+                raise ValueError("--replace-route-id needs the prior route ID and task")
+            replace_id, rest = rest[1], rest[2:]
+        task = " ".join(rest)
     lane = _lane_by_id(lane_id) if lane_id else None
     if lane is not None:
-        return route_card(lane, 1.0, [], pinned=True)
+        route_id = _note_route(task, lane, "pinned", 1.0, replace_route_id=replace_id)
+        return route_card(lane, 1.0, [], pinned=True, route_id=route_id)
     if lane_id:
         known = ", ".join(l["id"] for l in _load_routes())
         raise ValueError(f"unknown lane {lane_id!r}; known lanes: {known}")
     lane_obj, conf, hits, method, facets = route_full(task)
-    try:  # flywheel label; logging must never break the card
-        from . import flywheel as _fw
-        _fw.note_route(task, lane_obj, method, conf, facets=facets)
-    except Exception:
-        pass
-    return route_card(lane_obj, conf, hits, method=method, facets=facets)
+    route_id = _note_route(task, lane_obj, method, conf, facets=facets)
+    return route_card(lane_obj, conf, hits, method=method, facets=facets, route_id=route_id)
 
 
 def handle_route_command(raw_args: str) -> str:
@@ -412,7 +422,7 @@ def handle_route_command(raw_args: str) -> str:
     try:
         if not (raw_args or "").strip():
             lanes = _load_routes()
-            return ("usage: /route [--lane <lane-id>] <task>\n"
+            return ("usage: /route [--lane <lane-id> [--replace-route-id <id>]] <task>\n"
                     "lanes: " + ", ".join(l["id"] for l in lanes))
         return _card_for_args(raw_args)
     except Exception as exc:
@@ -510,6 +520,7 @@ workflow (route -> arm -> rate, in the session that runs the task):
   4. /rate pass|fail [--lane <lane-id>] [--note ...]
                              label the outcome; --lane files a correction
                              when the route got the lane wrong
+                             --route-id <id> selects a pending route when overlapping
 same flow from the terminal: hermes evalroute route "<task>" (step 1) and
 hermes evalroute rate pass --note ... (step 4); steps 2-3 are chat commands.
 routing data improves only when routes are rated: unrouted tasks cost the
@@ -530,6 +541,7 @@ def setup_cli(subparser) -> None:
     rate_p.add_argument("verdict", nargs="?", choices=["pass", "fail", "skip"],
                         help="pass | fail | skip")
     rate_p.add_argument("--lane", help="File a lane correction (the lane it should have been)")
+    rate_p.add_argument("--route-id", help="Select a pending route explicitly (profile-wide ledger)")
     rate_p.add_argument("--note", help="Why — the highest-value part of the label")
     install_p = subs.add_parser("install-routes", help="Write the route table's effort "
                                    "column into agent.reasoning_overrides")
@@ -550,6 +562,8 @@ def evalroute_cli(args) -> int:
         parts = [getattr(args, "verdict", None) or ""]
         if getattr(args, "lane", None):
             parts.append(f"--lane {args.lane}")
+        if getattr(args, "route_id", None):
+            parts.append(f"--route-id {args.route_id}")
         if getattr(args, "note", None):
             parts.append(f"--note {args.note}")
         print(_fw.handle_rate(" ".join(parts)))
