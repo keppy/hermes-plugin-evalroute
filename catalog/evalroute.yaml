@@ -5,7 +5,7 @@
 # `git rev-parse v<version>^{commit}` in the commit after tagging, never by hand.
 name: evalroute
 repo: https://github.com/keppy/hermes-plugin-evalroute
-sha: b45f1362b1de2813087fd8f7f3d8bf34e1e64abc
+sha: 684c6a871787870519b41b8cef0a152334fbf8ee
 description: Route a task to the right (model, reasoning effort) arm before you start.
   Classifies the task into a lane, prints a provenance-carrying route card, and installs
   per-model reasoning-effort defaults. Strong rules run locally; weak-signal
