@@ -31,6 +31,20 @@ The route table ships as the **2026-09-26 priors snapshot** (public
 benchmarks, many vendor-run): replace rows with your own measured data as
 soon as you have it, and update each row's `provenance`.
 
+## The loop, end to end
+
+![evalroute demo](docs/demo.gif)
+
+One command classifies the task and prints the arm (`route`), the card
+tells you what to run and how to check the lane (`next:`), and one command
+closes the loop (`rate`). The GIF shows the real plugin (v0.3.2, installed
+at the release pin) on a DL/ML lane task: the `basis: measured` line and the
+gonogo stamp are live output — 10 shared tasks, both arms at 100% coverage,
+$p = 1.000$, a cost decision between ties — and the `logged:` line confirms
+which row the rating closed. Commands and output are verbatim captures;
+only the typing animation is authored. The demo pair was then pruned from
+the labels file — demo records never live in the ledger.
+
 ## What this changes for Hermes
 
 Hermes ships one default (model, effort) per user; every task pays the same
