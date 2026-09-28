@@ -45,6 +45,37 @@ which row the rating closed. Commands and output are verbatim captures;
 only the typing animation is authored. The demo pair was then pruned from
 the labels file — demo records never live in the ledger.
 
+## Where evalroute sits
+
+evalroute is one tile of a small ecosystem that takes a task from
+*which model?* to *ship it or not*:
+
+```
+your task ──► evalroute ─ the right (model, effort) arm for the task,
+                │         by measured cost per verified success
+                ▼
+your cases ──► thomas ── a calibrated model trained against your bar;
+                │         gonogo scores the baseline and the after
+                ▼
+              gonogo ── ship it, ship it behind a threshold, or walk away
+```
+
+- **[evalroute](https://github.com/keppy/hermes-plugin-evalroute)**
+  (this repo) — the routing layer: classify the task, hand back the arm
+  with measured cost-per-verified-success behind it, rate the outcome so
+  the table keeps learning.
+- **[gonogo](https://github.com/keppy/gonogo)** — the decision layer, and
+  the root of the map. Any agent, your real cases, a target; the verdict
+  comes with the interval behind it.
+- **[thomas](https://github.com/keppy/thomas)** — the training harness. When
+  the verdict is *not yet*: one case set, one `score_text`, a baseline card,
+  a training run (encoder SFT on Modal, or RL), the same bar at both ends.
+- **The Hermes plugins** — the same three, inside your agent's session:
+  this one (`/route` before the first turn),
+  [gonogo](https://github.com/keppy/hermes-plugin-gonogo) where the number
+  happened, [thomas](https://github.com/keppy/hermes-plugin-thomas) with GPU
+  launches behind the approval gate.
+
 ## What this changes for Hermes
 
 Hermes ships one default (model, effort) per user; every task pays the same
