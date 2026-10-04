@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1] - 2026-10-03
+
+### Fixed
+
+- `hermes evalroute dispatch` crashed with `ModuleNotFoundError: flywheel` when
+  the plugin is installed as a package: `dispatch.py` is loaded by file path
+  (to dodge a pytest package-shadowing hazard), so its bare sibling imports had
+  no package context. `tools.py` now injects the already-imported `flywheel`
+  and `tools` modules before executing it. 0.4.0's suite was green because
+  pytest imports the plugin root as top-level, where the bare import works —
+  the first live run on PATH caught it.
+
 ## [0.4.0] - 2026-10-03
 
 ### Added
