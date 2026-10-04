@@ -191,6 +191,26 @@ union of the two source tables (9 lanes); where they disagreed (long-doc
 merged into web-research in one, orchestration only in the other) both are
 kept as distinct lanes. Model ids must match `/model` spelling exactly.
 
+### Route table: bundled or synced
+
+The table you route against is either the bundled one or a pinned dataset
+revision; the card says which. The dataset is fetched only when you run
+`sync` (never on install, never while routing), it is pinned to a resolved
+revision, and the plugin works fully offline without it:
+
+```bash
+hermes evalroute sync --revision <sha>   # pin the published table (default: main)
+hermes evalroute sync --status           # bundled, or dataset @ <sha>
+hermes evalroute sync --clear            # back to the bundled table
+```
+
+`sync` downloads only the `routes/` config of
+[keppy/evalroute-flywheel](https://huggingface.co/datasets/keppy/evalroute-flywheel)
+into `<hermes home>/evalroute/dataset/<sha>/` — never the measured evidence
+(grows over time; leave it on the Hub). It needs `pip install
+huggingface_hub`. Routing data lands only under the Hermes home, like the
+ledger.
+
 ### Regenerating from measured data
 
 ```bash

@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.5.0] - 2026-10-03
+
+### Added
+
+- `hermes evalroute sync [--revision R] [--status] [--clear]`: pin the
+  published route-table dataset `keppy/evalroute-flywheel` under
+  `<hermes home>/evalroute/dataset/<sha>/`. The dataset is fetched only on
+  the user's explicit `sync`, pinned to a resolved commit sha, and routing
+  works fully offline without it: without (or after `--clear`) every code
+  path uses the bundled `data/routes.yaml` exactly as before. `sync`
+  downloads only the `routes/` config (not the measured evidence),
+  validates the table through the same lane validation as the bundled
+  loader plus the MANIFEST's `routes_sha256`, refuses a bad download
+  without touching the active table, and needs `huggingface_hub`
+  (`pip install huggingface_hub`) — an optional extra, so the plugin keeps
+  importing it lazily and lists no new dependency.
+- The route card gains a `table:` provenance line (also in the
+  `_tool_result` JSON envelope / `route --json`): `table: bundled (plugin
+  0.4.1)` or `table: keppy/evalroute-flywheel @ <sha12> (generated <date>,
+  plugin <version>)`.
+- `scripts/publish_dataset.py` (run by hand, stdlib + huggingface_hub
+  only): stages `measured/<lane>/{runs.jsonl,report.csv,tasks.jsonl}`,
+  `measured/models/`, a byte copy of `data/routes.yaml` with a
+  `routes/MANIFEST.json` (version, commit, sha256s, date) and a dataset
+  card, and uploads it; `--dry-run` prints the tree and uploads nothing.
+
+### Changed
+
+- Route-table resolution is now: pinned dataset table if
+  `<hermes home>/evalroute/dataset/current` names a dir whose
+  `routes/routes.yaml` parses and validates, else bundled. A corrupt
+  dataset table falls back to bundled with one warning on stderr —
+  routing must always work. `_load_routes` shares `_validate_lanes` with
+  `sync`; no lane, keyword or number changed.
+
 ## [0.4.1] - 2026-10-03
 
 ### Fixed

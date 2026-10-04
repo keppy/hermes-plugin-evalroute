@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,24 +30,89 @@ _EFFORT_RE = re.compile(r"(none|minimal|low|medium|high|xhigh|max)")
 
 _LLM_LANES = None  # lazy-loaded routes cache
 
+# Which route table is in effect, set by _load_routes() whenever it resolves.
+# {"kind": "bundled"} or {"kind": "dataset", "sha": ..., "generated": ...,
+# "plugin_version": ...}.
+ROUTES_SOURCE: dict[str, Any] = {"kind": "bundled"}
+
+_REPO_ID = "keppy/evalroute-flywheel"
+
+
+def _dataset_root() -> Path:
+    """<hermes home>/evalroute/dataset (profile-safe; never inside the plugin dir)."""
+    try:
+        from hermes_constants import get_hermes_home
+        home = Path(get_hermes_home())
+    except Exception:
+        # no Hermes installed: HERMES_HOME must still win (tests set it)
+        home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    return home / "evalroute" / "dataset"
+
+
+def _validate_lanes(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Shared lanes validation for the bundled and dataset tables."""
+    lanes = raw.get("lanes")
+    if not isinstance(lanes, list) or not lanes:
+        raise ValueError("routes table has no lanes list")
+    seen: set[str] = set()
+    for lane in lanes:
+        for field in ("id", "label", "model", "effort"):
+            if not lane.get(field):
+                raise ValueError(f"lane entry missing required field {field!r}: {lane}")
+        if lane["id"] in seen:
+            raise ValueError(f"duplicate lane id {lane['id']!r}")
+        seen.add(lane["id"])
+    return lanes
+
+
+def _dataset_current_sha() -> str | None:
+    """The sha `current` names, or None (no pointer file)."""
+    try:
+        sha = (_dataset_root() / "current").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return sha or None
+
+
+def reset_routes_cache() -> None:
+    """Drop the lane cache so the next _load_routes() re-resolves the table."""
+    global _LLM_LANES
+    _LLM_LANES = None
+
 
 def _load_routes() -> list[dict[str, Any]]:
-    """Parse and minimally validate data/routes.yaml; raise on structural errors."""
+    """Resolve the active route table: synced dataset first, bundled fallback.
+
+    A synced table is only used when it parses and validates; anything else
+    (missing, corrupt, bad yaml, duplicate ids) warns once on stderr and
+    routes on the bundled table. Routing must always work.
+    """
     global _LLM_LANES
     if _LLM_LANES is None:
+        sha = _dataset_current_sha()
+        if sha:
+            ds_dir = _dataset_root() / sha
+            try:
+                raw = yaml.safe_load(
+                    (ds_dir / "routes" / "routes.yaml").read_text(encoding="utf-8")) or {}
+                _LLM_LANES = _validate_lanes(raw)
+                manifest = json.loads((ds_dir / "routes" / "MANIFEST.json")
+                                      .read_text(encoding="utf-8"))
+                ROUTES_SOURCE.clear()
+                ROUTES_SOURCE.update({
+                    "kind": "dataset", "sha": sha,
+                    "generated": manifest.get("generated"),
+                    "plugin_version": manifest.get("plugin_version"),
+                })
+                return _LLM_LANES
+            except Exception as exc:
+                print(f"evalroute: synced route table at {ds_dir} unusable ({exc}); "
+                      "using the bundled table", file=sys.stderr)
+                reset_routes_cache()
         raw = yaml.safe_load(ROUTES_FILE.read_text(encoding="utf-8")) or {}
-        lanes = raw.get("lanes")
-        if not isinstance(lanes, list) or not lanes:
-            raise ValueError(f"{ROUTES_FILE} has no lanes list")
-        seen: set[str] = set()
-        for lane in lanes:
-            for field in ("id", "label", "model", "effort"):
-                if not lane.get(field):
-                    raise ValueError(f"lane entry missing required field {field!r}: {lane}")
-            if lane["id"] in seen:
-                raise ValueError(f"duplicate lane id {lane['id']!r}")
-            seen.add(lane["id"])
-        _LLM_LANES = lanes
+        ROUTES_SOURCE.clear()
+        ROUTES_SOURCE.update({"kind": "bundled"})
+        _LLM_LANES = _validate_lanes(raw)
     return _LLM_LANES
 
 
@@ -270,6 +336,25 @@ def classify(task: str) -> tuple[dict[str, Any], float, list[str]]:
     return _lane_by_id(top_id), conf, scores[top_id]
 
 
+def _plugin_version() -> str:
+    """Version from plugin.yaml (best effort; never breaks a card)."""
+    try:
+        raw = yaml.safe_load((PLUGIN_DIR / "plugin.yaml").read_text(encoding="utf-8")) or {}
+        return str(raw.get("version", "?"))
+    except Exception:
+        return "?"
+
+
+def _table_line() -> str:
+    """Card provenance for the table itself (bundled vs pinned dataset revision)."""
+    _load_routes()  # ensure ROUTES_SOURCE reflects the table this card came from
+    if ROUTES_SOURCE.get("kind") == "dataset":
+        return (f"table: {_REPO_ID} @ {str(ROUTES_SOURCE.get('sha', ''))[:12]} "
+                f"(generated {ROUTES_SOURCE.get('generated')}, "
+                f"plugin {ROUTES_SOURCE.get('plugin_version')})")
+    return f"table: bundled (plugin {_plugin_version()})"
+
+
 def route_card(lane: dict[str, Any], conf: float, hits: list[str],
                pinned: bool = False, method: str = "rules",
                facets: list[str] | None = None, route_id: str | None = None) -> str:
@@ -297,6 +382,7 @@ def route_card(lane: dict[str, Any], conf: float, hits: list[str],
         lines.append("classification: no keyword hit - defaulted to long-doc-reading; "
                      "pass --lane <id> to pin, or say the task in more words")
     lines.append(f"basis: {lane.get('provenance', 'unknown')}")
+    lines.append(_table_line())
     if lane.get("notes"):
         lines.append(f"note: {lane['notes']}")
     lines.append(f"why here: {lane.get('match_hint', '')}")
@@ -352,6 +438,7 @@ def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool,
         # (examples/artifacts/tier-a-models.json base_url).
         "provider": lane.get("provider") or "nous",
         "provenance": lane.get("provenance", ""),
+        "table": _table_line(),
         "card": card,
     }, ensure_ascii=False)
 
@@ -574,6 +661,14 @@ def setup_cli(subparser) -> None:
     install_p = subs.add_parser("install-routes", help="Write the route table's effort "
                                    "column into agent.reasoning_overrides")
     install_p.add_argument("--dry-run", action="store_true", help="Show the diff, write nothing")
+    status_p = subs.add_parser("sync", help="Pin the published route table "
+                               "(keppy/evalroute-flywheel) under the Hermes home")
+    status_p.add_argument("--revision", help="Pin a specific dataset revision "
+                          "(default: resolve 'main' to its commit sha)")
+    status_p.add_argument("--status", action="store_true",
+                          help="Show which route table is active; no network")
+    status_p.add_argument("--clear", action="store_true",
+                          help="Unpin the dataset table; route on the bundled table")
     dispatch_p = subs.add_parser("dispatch",
                                  help="Route a brief, spawn hermes chat on that arm, "
                                       "print the rate line",
@@ -606,6 +701,12 @@ def evalroute_cli(args) -> int:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module.run(args)
+    if action == "sync":
+        try:
+            from . import dataset
+        except ImportError:
+            import dataset  # type: ignore
+        return dataset.run(args)
     if action == "rate":
         try:
             from . import flywheel as _fw

@@ -24,5 +24,7 @@ def isolated_hermes_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     import flywheel
     flywheel._MEMORY.clear()
+    import tools
+    tools.reset_routes_cache()  # no test inherits another test's table resolution
     yield
     flywheel._MEMORY.clear()
