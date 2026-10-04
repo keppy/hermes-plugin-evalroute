@@ -16,12 +16,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-try:
-    from . import flywheel as fw
-    from . import tools
-except ImportError:  # pragma: no cover - pytest imports the plugin root as top-level
-    import flywheel as fw  # type: ignore
-    import tools  # type: ignore
+if "fw" not in globals() or "tools" not in globals():  # injected by tools.evalroute_cli when loaded by path
+    try:
+        from . import flywheel as fw
+        from . import tools
+    except ImportError:  # pragma: no cover - pytest imports the plugin root as top-level
+        import flywheel as fw  # type: ignore
+        import tools  # type: ignore
 
 _ROUTE_ID_COMMENT = re.compile(r"<!--\s*evalroute:\s*route-id=([0-9a-fA-F]+)\s*-->")
 _SESSION_ID = re.compile(r"session_id:\s*(\S+)")

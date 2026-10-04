@@ -699,6 +699,17 @@ def evalroute_cli(args) -> int:
         mod_path = Path(__file__).resolve().parent / "dispatch.py"
         spec = importlib.util.spec_from_file_location("evalroute_dispatch", mod_path)
         module = importlib.util.module_from_spec(spec)
+        # Loaded by path, dispatch.py has no package context: `from . import flywheel`
+        # fails and, when the plugin is installed as a package, so does the bare
+        # `import flywheel` fallback. Hand it its siblings before it runs. Found on the
+        # first live run of 0.4.0; the fix was copied into the install but never committed,
+        # so 0.5.0 shipped without it. test_dispatch_loads_without_bare_sibling_imports guards it.
+        try:
+            from . import flywheel as _fw_mod
+        except ImportError:
+            import flywheel as _fw_mod  # type: ignore
+        module.fw = _fw_mod
+        module.tools = sys.modules[__name__]
         spec.loader.exec_module(module)
         return module.run(args)
     if action == "sync":

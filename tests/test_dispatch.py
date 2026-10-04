@@ -200,3 +200,27 @@ def test_dispatch_route_id_comment_replaces(home, tmp_path, monkeypatch, capsys)
     assert routes[-1]["method"] == "pinned"
     replaced = [r for r in recs if r["kind"] == "outcome" and r["rated"] == "skip"]
     assert replaced and replaced[-1]["consumes_id"] == old_id
+
+
+def test_dispatch_loads_without_bare_sibling_imports(home, tmp_path, monkeypatch, capsys):
+    """Installed as a package, dispatch.py (loaded by path) cannot `import flywheel` bare.
+
+    tools.evalroute_cli must inject the siblings before exec. Simulate the installed layout:
+    the bare name is importable to *tools* (already in sys.modules) but any *fresh* bare import
+    attempted from inside dispatch.py fails. Regression for the 0.4.0/0.5.0 live crash.
+    """
+    import builtins
+    _make_stub(tmp_path, monkeypatch)
+    brief = _make_brief(tmp_path)
+    real_import = builtins.__import__
+
+    def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in ("flywheel", "tools") and level == 0 and (globals or {}).get("__name__") == "evalroute_dispatch":
+            raise ModuleNotFoundError(f"bare `import {name}` reached from path-loaded dispatch.py")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    rc = _dispatch(dict(brief=str(brief), lane="routine-coding", indir=None, task=None,
+                        out=None, timeout=None, rate_on_exit=None, dry_run=True))
+    assert rc == 0
+    assert "would run:" in capsys.readouterr().out

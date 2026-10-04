@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.1] - 2026-10-03
+
+### Fixed
+
+- `hermes evalroute dispatch` crashed on the installed plugin with `ModuleNotFoundError: flywheel`
+  (0.5.0, and 0.4.0 before it). `dispatch.py` is loaded by file path, so it has no package context and
+  its bare sibling imports only resolve under pytest. `tools.evalroute_cli` now hands it `fw`/`tools`
+  before exec, and `dispatch.py` only imports when they were not injected. The 0.4.1 fix for this
+  was copied into the live install but never committed, which is how 0.5.0 shipped without it; a
+  test now makes the bare import fail from inside the path-loaded module.
+
 ## [0.5.0] - 2026-10-03
 
 ### Added
