@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1] - 2026-10-04
+
+### Changed
+
+- Pin `evalroute>=0.8,<0.9`: brings `hermes evalroute contribute` (opt-in, gated on
+  `evalroute.contribute: true` in config.yaml, redacted outcome rows to your own HF
+  path), `--version`, and `evalroute_version` in `route --json`. Catalog description
+  gains the matching Disclosure clause. Plugin code unchanged.
+
 ## [0.6.0] - 2026-10-04
 
 ### Changed
