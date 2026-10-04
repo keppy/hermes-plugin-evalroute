@@ -82,9 +82,25 @@ def test_bundled_skill_registered(ctx):
     assert text.startswith("---") and "name: evalroute-routing" in text
 
 
-def test_route_slash_command_registered(ctx):
+def test_route_slash_command_registered(ctx, monkeypatch):
     assert "route" in ctx.commands
-    assert ctx.commands["route"]["handler"].__module__.endswith("tools")
+    # The handler is a plugin wrapper that pins the "hermes-chat" surface
+    # before delegating to evalroute.routing.handle_route_command.
+    from evalroute import routing
+    seen = []
+    monkeypatch.setattr(routing, "set_surface", lambda s: seen.append(s))
+    monkeypatch.setattr(routing, "handle_route_command", lambda args: f"card:{args}")
+    assert ctx.commands["route"]["handler"]("--lane routine-coding x") == "card:--lane routine-coding x"
+    assert seen == ["hermes-chat"]
+
+
+def test_cli_command_sets_hermes_cli_surface(ctx, monkeypatch):
+    from evalroute import routing, cli
+    seen = []
+    monkeypatch.setattr(routing, "set_surface", lambda s: seen.append(s))
+    monkeypatch.setattr(cli, "evalroute_cli", lambda args: 0)
+    assert ctx.cli_commands["evalroute"]["handler_fn"](object()) == 0
+    assert seen == ["hermes-cli"]
 
 
 def test_cli_command_registered(ctx):

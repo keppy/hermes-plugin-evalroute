@@ -22,9 +22,9 @@ if str(ROOT) not in sys.path:
 def isolated_hermes_home(tmp_path, monkeypatch):
     """No test may read or write the user's live profile or labels."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    import flywheel
+    from evalroute import flywheel
     flywheel._MEMORY.clear()
-    import tools
-    tools.reset_routes_cache()  # no test inherits another test's table resolution
+    from evalroute import routing
+    routing.reset_routes_cache()  # no test inherits another test's table resolution
     yield
     flywheel._MEMORY.clear()

@@ -15,7 +15,7 @@ maintainer: keppy
 tier: community
 category: tools
 requires_hermes: ">=0.21"
-version: "0.5.1"
+version: "0.6.0"
 docs_url: https://github.com/keppy/hermes-plugin-evalroute#readme
 capabilities:
   provides_tools:

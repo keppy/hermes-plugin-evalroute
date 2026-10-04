@@ -24,15 +24,8 @@ from __future__ import annotations
 
 import logging
 
-try:
-    from . import tools
-except ImportError:  # pragma: no cover - pytest imports the plugin root as a top-level module
-    import tools  # type: ignore
-
-try:
-    from . import flywheel as _fw
-except ImportError:  # pragma: no cover
-    import flywheel as _fw  # type: ignore
+from evalroute import routing as tools
+from evalroute import flywheel as _fw
 
 logger = logging.getLogger(__name__)
 

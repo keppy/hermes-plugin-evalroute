@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import pytest
 
-import sniff
-import tools
-import flywheel
+from evalroute import flywheel
+from evalroute import routing
+from evalroute import routing as tools
 
-from tests.test_flywheel import home  # noqa: F401  (isolates HERMES_HOME)
+import sniff
+
+
+@pytest.fixture(autouse=True)
+def home(tmp_path, monkeypatch):
+    """Isolated HERMES_HOME: the plugin tests must never touch the live profile."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    flywheel._MEMORY.clear()
+    routing.reset_routes_cache()
+    yield
+    flywheel._MEMORY.clear()
 
 
 @pytest.fixture(autouse=True)

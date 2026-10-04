@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.0] - 2026-10-04
+
+### Changed
+- Depends on `evalroute>=0.7,<0.8` (was `>=0.6,<0.7`). The plugin sets the library's command surface per call path — `hermes-chat` for `/route`, `/rate` and the tool, `hermes-cli` for `hermes evalroute …` — so card hints match where you typed. Contract version unchanged (the library added `set_surface` as an additive name).
+- The plugin is now a thin adapter over the `evalroute` library
+  (PyPI `evalroute`, source keppy/evalroute): `__init__.py`
+  imports the nine contract names from `evalroute.*` and wires them into
+  Hermes unchanged; `sniff.py` classifies via `evalroute.routing`. A
+  contract guard (`evalroute.contract.CONTRACT_VERSION == 1`) runs before
+  any registration and refuses to register against a library that speaks a
+  different contract.
+- `pyproject.toml` dependencies: `evalroute>=0.6,<0.7` (drops the direct
+  `pyyaml` pin; the library brings it). No version bump here — the
+  dispatcher releases.
+
+### Removed
+
+- `tools.py`, `flywheel.py`, `dispatch.py`, `dataset.py`, `schemas.py`,
+  `adjudicate.py`, `routes_from_report.py`, `routes_from_labels.py`,
+  `harness/`, `runners/`, `data/`, `examples/`, `scripts/`, and every test
+  that moved with them — all now live in the evalroute library
+  (keppy/evalroute). The plugin keeps `__init__.py`, `sniff.py`,
+  `plugin.yaml`, `catalog/`, `skills/`, and adapter-only tests
+  (`test_registration.py`, `test_sniff.py`, `test_contract.py`).
+
 ## [0.5.1] - 2026-10-03
 
 ### Fixed

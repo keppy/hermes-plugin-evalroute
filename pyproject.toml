@@ -1,13 +1,14 @@
-# Hermes reads [project].dependencies from this file and installs them into its
-# own venv. evalroute's route table is hand-edited YAML; pyyaml is the only
-# dependency and it is already part of the Hermes venv (manifest parsing).
-# Strong rules are local; weak-signal routing invokes ctx.llm (token cost).
-# The separately invoked harness/shim can call paid providers; they do not
-# run on plugin import or as a side effect of installing the plugin.
+# Hermes reads [project].dependencies from this file and installs them into
+# its own venv. The plugin is a thin adapter: every behaviour lives in the
+# `evalroute` library (PyPI), which brings pyyaml with it, so the plugin
+# declares no dependency of its own beyond the library pin. Strong rules run
+# locally inside the library; weak-signal routing invokes ctx.llm (token
+# cost). The separately invoked harness/shim can call paid providers; they
+# do not run on plugin import or as a side effect of installing the plugin.
 
 [project]
 name = "hermes-plugin-evalroute"
-version = "0.5.1"
+version = "0.6.0"
 description = "Hermes plugin: route tasks to the right (model, reasoning effort) arm, from a measured cost-per-verified-success table."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +17,7 @@ authors = [{ name = "James Dominguez" }]
 keywords = ["hermes", "plugin", "model-routing", "evals", "reasoning-effort"]
 
 dependencies = [
-  "pyyaml>=6,<7",
+  "evalroute>=0.7,<0.8",
 ]
 
 [project.optional-dependencies]
