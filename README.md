@@ -315,6 +315,14 @@ in daily sessions, the plugin quietly builds an observational dataset:
   switch arguments and optional notes are recorded. The last-seen model is
   process-global memory only and is **not** assigned to a route as fact.
 
+The ledger therefore holds two row qualities: an **observed arm** (a `/model`
+or `/reasoning` switch after a route — a process-global candidate, not proof)
+and a **caller-stated arm** (`hermes evalroute dispatch <brief.md>` records
+the spawn arguments as `arm_attribution: explicit_user` on the outcome row).
+`dispatch` is the one-line form of the flywheel: route the brief, spawn
+`hermes chat` on exactly that arm, print the `rate it:` line — it still never
+auto-rates `pass`.
+
 The ledger is **profile-wide**, not session-scoped: Hermes command hooks do
 not supply a reliable session ID for `/route` and `/rate`. The card prints a
 route ID; when tasks overlap, select it with `--route-id`. Without it, `/rate`

@@ -38,6 +38,11 @@ work. The card prints this as its `next:` line so nobody has to remember it:
    correction if the route was wrong. From the terminal:
    `hermes evalroute rate pass --note ...`.
 
+   Mechanized variant: `hermes evalroute dispatch <brief.md>` runs steps 1-3
+   on a subprocess worker (spawning `hermes chat` on the routed arm) and
+   prints the exact `rate it:` line for step 4 — the human still verifies and
+   rates; it never auto-rates `pass`.
+
 Steps 1 and 4 are where the data comes from: routes that are never rated
 teach the table nothing. The ledger is profile-wide, not session-specific;
 without `--route-id`, `/rate` consumes the latest pending route. Check the

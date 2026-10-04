@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -321,10 +322,16 @@ def _effort_auto(lane: dict[str, Any]) -> bool:
     try:
         from hermes_constants import get_hermes_home
         config = yaml.safe_load((Path(get_hermes_home()) / "config.yaml").read_text(encoding="utf-8")) or {}
-        overrides = (config.get("agent") or {}).get("reasoning_overrides") or {}
-        return isinstance(overrides, dict) and overrides.get(lane["model"]) == _effort_for_override(lane)
     except Exception:
-        return False
+        # no Hermes installed: HERMES_HOME must still win (tests set it);
+        # no config file there -> not auto (footer keeps /reasoning)
+        try:
+            home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+            config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8")) or {}
+        except Exception:
+            return False
+    overrides = (config.get("agent") or {}).get("reasoning_overrides") or {}
+    return isinstance(overrides, dict) and overrides.get(lane["model"]) == _effort_for_override(lane)
 
 
 def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool,
@@ -340,6 +347,10 @@ def _tool_result(card: str, lane: dict[str, Any], conf: float, pinned: bool,
         "classification_method": method,
         "pinned": pinned,
         "route_id": route_id,
+        # No provider field exists in routes.yaml; until the route table grows
+        # one, every lane is served by the nous inference API
+        # (examples/artifacts/tier-a-models.json base_url).
+        "provider": lane.get("provider") or "nous",
         "provenance": lane.get("provenance", ""),
         "card": card,
     }, ensure_ascii=False)
@@ -390,8 +401,12 @@ def evalroute_route(args: dict[str, Any], **_) -> str:
 
 # ---------------------------------------------------------------- slash + CLI
 
-def _card_for_args(raw_args: str) -> str:
-    """Shared body for /route and `hermes evalroute route`."""
+def _route_for_args(raw_args: str) -> tuple[str, dict[str, Any], float, bool, str, str | None]:
+    """Shared body for /route and `hermes evalroute route`.
+
+    Returns (card, lane, confidence, pinned, method, route_id) so the CLI
+    can also emit the _tool_result JSON envelope.
+    """
     parts = (raw_args or "").split()
     lane_id = replace_id = ""
     task = (raw_args or "").strip()
@@ -408,13 +423,19 @@ def _card_for_args(raw_args: str) -> str:
     lane = _lane_by_id(lane_id) if lane_id else None
     if lane is not None:
         route_id = _note_route(task, lane, "pinned", 1.0, replace_route_id=replace_id)
-        return route_card(lane, 1.0, [], pinned=True, route_id=route_id)
+        return route_card(lane, 1.0, [], pinned=True, route_id=route_id), \
+            lane, 1.0, True, "pinned", route_id
     if lane_id:
         known = ", ".join(l["id"] for l in _load_routes())
         raise ValueError(f"unknown lane {lane_id!r}; known lanes: {known}")
     lane_obj, conf, hits, method, facets = route_full(task)
     route_id = _note_route(task, lane_obj, method, conf, facets=facets)
-    return route_card(lane_obj, conf, hits, method=method, facets=facets, route_id=route_id)
+    return route_card(lane_obj, conf, hits, method=method, facets=facets, route_id=route_id), \
+        lane_obj, conf, False, method, route_id
+
+
+def _card_for_args(raw_args: str) -> str:
+    return _route_for_args(raw_args)[0]
 
 
 def handle_route_command(raw_args: str) -> str:
@@ -523,6 +544,8 @@ workflow (route -> arm -> rate, in the session that runs the task):
                              --route-id <id> selects a pending route when overlapping
 same flow from the terminal: hermes evalroute route "<task>" (step 1) and
 hermes evalroute rate pass --note ... (step 4); steps 2-3 are chat commands.
+hermes evalroute dispatch <brief.md> runs steps 1-3 on a subprocess worker and
+prints the rate line for step 4.
 routing data improves only when routes are rated: unrouted tasks cost the
 same as ever, unrated routes teach nothing."""
 
@@ -535,6 +558,9 @@ def setup_cli(subparser) -> None:
                               formatter_class=argparse.RawDescriptionHelpFormatter)
     route_p.add_argument("task", nargs="*", help="The task description")
     route_p.add_argument("--lane", help="Pin a lane id instead of classifying")
+    route_p.add_argument("--replace-route-id", help="Replace a specific pending route (requires --lane)")
+    route_p.add_argument("--json", action="store_true",
+                         help="Print the tool-result JSON envelope instead of the card")
     rate_p = subs.add_parser("rate", help="Rate the last routed task: pass|fail",
                              epilog=_WORKFLOW_EPILOG,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -542,10 +568,27 @@ def setup_cli(subparser) -> None:
                         help="pass | fail | skip")
     rate_p.add_argument("--lane", help="File a lane correction (the lane it should have been)")
     rate_p.add_argument("--route-id", help="Select a pending route explicitly (profile-wide ledger)")
+    rate_p.add_argument("--model", help="Confirm the actual arm's model id (diagnostic; with --effort)")
+    rate_p.add_argument("--effort", help="Confirm the actual arm's effort (diagnostic; with --model)")
     rate_p.add_argument("--note", help="Why — the highest-value part of the label")
     install_p = subs.add_parser("install-routes", help="Write the route table's effort "
                                    "column into agent.reasoning_overrides")
     install_p.add_argument("--dry-run", action="store_true", help="Show the diff, write nothing")
+    dispatch_p = subs.add_parser("dispatch",
+                                 help="Route a brief, spawn hermes chat on that arm, "
+                                      "print the rate line",
+                                 epilog=_WORKFLOW_EPILOG,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    dispatch_p.add_argument("brief", help="Path to the brief markdown file")
+    dispatch_p.add_argument("--lane", help="Pin a lane id instead of classifying")
+    dispatch_p.add_argument("--in", dest="indir", help="Extra --in dir for the child session")
+    dispatch_p.add_argument("--task", help="Task description (default: the brief's first paragraph)")
+    dispatch_p.add_argument("--out", help="Report path (default: <brief stem>.report.md beside it)")
+    dispatch_p.add_argument("--timeout", type=float, help="Kill the child after SECONDS (exit 124)")
+    dispatch_p.add_argument("--rate-on-exit", choices=["fail"],
+                            help="Auto-rate fail when the child exits non-zero (never auto-passes)")
+    dispatch_p.add_argument("--dry-run", action="store_true",
+                            help="Route and print the argv; spawn nothing")
     subparser.set_defaults(func=evalroute_cli)
 
 
@@ -554,6 +597,15 @@ def evalroute_cli(args) -> int:
     action = getattr(args, "evalroute_action", None)
     if action == "install-routes":
         return install_routes(dry_run=bool(getattr(args, "dry_run", False)))
+    if action == "dispatch":
+        # The worktree dir may itself be importable as package "dispatch"
+        # (root __init__.py + pytest), shadowing dispatch.py; load by path.
+        import importlib.util
+        mod_path = Path(__file__).resolve().parent / "dispatch.py"
+        spec = importlib.util.spec_from_file_location("evalroute_dispatch", mod_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run(args)
     if action == "rate":
         try:
             from . import flywheel as _fw
@@ -564,6 +616,10 @@ def evalroute_cli(args) -> int:
             parts.append(f"--lane {args.lane}")
         if getattr(args, "route_id", None):
             parts.append(f"--route-id {args.route_id}")
+        if getattr(args, "model", None):
+            parts.append(f"--model {args.model}")
+        if getattr(args, "effort", None):
+            parts.append(f"--effort {args.effort}")
         if getattr(args, "note", None):
             parts.append(f"--note {args.note}")
         print(_fw.handle_rate(" ".join(parts)))
@@ -571,17 +627,27 @@ def evalroute_cli(args) -> int:
     if action == "route":
         task = " ".join(getattr(args, "task", []) or [])
         lane = getattr(args, "lane", None)
+        replace_id = getattr(args, "replace_route_id", None)
+        as_json = getattr(args, "json", False)
         if not task and not lane:
             print(_WORKFLOW_EPILOG)
             return 2
+        if replace_id and not lane:
+            print("evalroute: --replace-route-id requires --lane <lane-id>")
+            return 2
         try:
             if lane:
-                print(_card_for_args(f"--lane {lane} {task}".strip()))
+                raw = f"--lane {lane} {f'--replace-route-id {replace_id}' if replace_id else ''} {task}".strip()
             else:
-                print(_card_for_args(task))
+                raw = task
+            card, lane_obj, conf, pinned, method, route_id = _route_for_args(raw)
         except Exception as exc:
             print(f"evalroute: {exc}")
             return 1
+        if as_json:
+            print(_tool_result(card, lane_obj, conf, pinned, method=method, route_id=route_id))
+        else:
+            print(card)
         return 0
     print(_WORKFLOW_EPILOG)
     return 2

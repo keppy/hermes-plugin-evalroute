@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 import routes_from_report as rfr
+import adjudicate
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("evalroute_harness_artifacts", ROOT / "harness/evalroute.py")
@@ -39,6 +40,9 @@ def test_vendored_legacy_reports_and_cost_claim(capsys):
     assert "0   30" in output  # pending, not treated as graded
 
 
+# the provenance-stamp comparison requires gonogo (McNemar); without it the
+# generator degrades to "gap unverified" (same guard as tests/test_adjudicate.py)
+@pytest.mark.skipif(adjudicate._gonogo() is None, reason="gonogo not installed")
 def test_shipped_route_cards_match_fresh_vendored_adjudication(tmp_path):
     artifacts = ROOT / "examples/artifacts"
     stored = {r["id"]: r for r in yaml.safe_load((ROOT / "data/routes.yaml").read_text())["lanes"]}

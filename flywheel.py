@@ -25,6 +25,7 @@ actual model.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import uuid
@@ -46,7 +47,8 @@ def labels_path() -> Path:
         from hermes_constants import get_hermes_home
         home = Path(get_hermes_home())
     except Exception:
-        home = Path.home() / ".hermes"
+        # no Hermes installed: HERMES_HOME must still win (tests set it)
+        home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
     d = home / "evalroute"
     d.mkdir(parents=True, exist_ok=True)
     return d / "labels.jsonl"
