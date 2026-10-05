@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.2] - 2026-10-04
+
+### Changed
+
+- Pin `evalroute>=0.9,<0.10`: brings `hermes evalroute export-cases` (your pinned routes
+  as encoder training rows — local file, counts only on stdout) and `hermes evalroute
+  install-encoder <dir|owner/name>` (opt-in local classifier between the keyword rules
+  and the LLM fallback; needs `evalroute[encoder]` in the plugin environment — the
+  plugin does not install torch). Nothing changes until you run `install-encoder`.
+  Plugin code unchanged.
+
 ## [0.6.1] - 2026-10-04
 
 ### Changed
