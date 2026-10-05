@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.4] - 2026-10-05
+
+### Changed
+- Pin `evalroute>=0.9.2,<0.10`. Plugin code unchanged. 0.9.2 makes the harness part of the
+  arm (`harness` on outcome rows and in `contribute`), adds the verified `claude-code` named
+  runner for `hermes evalroute dispatch --runner claude-code`, and `--model/--effort`
+  overrides on dispatch. Floor bump because the plugin environment never re-resolves an
+  unchanged requirement string.
+
 ## [0.6.3] - 2026-10-05
 
 ### Changed
