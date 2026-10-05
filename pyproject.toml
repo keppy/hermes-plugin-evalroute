@@ -17,7 +17,7 @@ authors = [{ name = "James Dominguez" }]
 keywords = ["hermes", "plugin", "model-routing", "evals", "reasoning-effort"]
 
 dependencies = [
-  "evalroute>=0.9.1,<0.10",
+  "evalroute==0.9.1",
 ]
 
 [project.optional-dependencies]
@@ -29,3 +29,7 @@ Source = "https://github.com/keppy/hermes-plugin-evalroute"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Exempt only reviewed exact pins; transitive releases keep Hermes' quarantine.
+[tool.uv.exclude-newer-package]
+evalroute = false
