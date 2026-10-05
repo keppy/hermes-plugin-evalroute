@@ -8,7 +8,7 @@
 
 [project]
 name = "hermes-plugin-evalroute"
-version = "0.6.2"
+version = "0.6.3"
 description = "Hermes plugin: route tasks to the right (model, reasoning effort) arm, from a measured cost-per-verified-success table."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ authors = [{ name = "James Dominguez" }]
 keywords = ["hermes", "plugin", "model-routing", "evals", "reasoning-effort"]
 
 dependencies = [
-  "evalroute>=0.9,<0.10",
+  "evalroute>=0.9.1,<0.10",
 ]
 
 [project.optional-dependencies]

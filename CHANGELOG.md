@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.3] - 2026-10-05
+
+### Changed
+- Pin `evalroute>=0.9.1,<0.10`. Plugin code unchanged. 0.9.1 ships flywheel schema 2
+  (lane corrections leave as lane pairs, never text; `max_turns` recorded as part of the
+  arm — `hermes evalroute dispatch` now passes `--max-turns` from `agent.max_turns`) and
+  the per-lane "real labeled rows" table in `report`. The lower bound moves because the
+  Hermes plugin environment is keyed on the requirement string: an unchanged pin never
+  re-resolves, so a floor bump is how a library fix reaches an installed plugin.
+
 ## [0.6.2] - 2026-10-04
 
 ### Changed
