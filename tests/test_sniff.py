@@ -31,7 +31,7 @@ def _isolated_ledger(home):
     flywheel._MEMORY["route"] = None
 
 
-def _first_turn(msg, model="qwen/qwen3.8-max", platform="cli"):
+def _first_turn(msg, model="qwen/qwen3.8-max-0902", platform="cli"):
     return sniff.sniff(
         session_id="s1", user_message=msg, is_first_turn=True,
         model=model, platform=platform,
@@ -39,7 +39,7 @@ def _first_turn(msg, model="qwen/qwen3.8-max", platform="cli"):
 
 
 def test_sniff_silent_on_match():
-    # qwen/qwen3.8-max IS the math lane's model -> no advice needed.
+    # qwen/qwen3.8-max-0902 IS the math lane's model -> no advice needed.
     out = _first_turn("prove the theorem with a full derivation and a lemma")
     assert out is None
 
@@ -56,7 +56,7 @@ def test_sniff_advises_on_mismatch():
     assert out is not None and "context" in out
     assert "/route" in out["context"]
     assert "advisory" in out["context"].lower()
-    assert "qwen/qwen3.8-max" in out["context"]
+    assert "qwen/qwen3.8-max-0902" in out["context"]
 
 
 def test_sniff_bare_slug_matches_prefixed_model():
@@ -146,7 +146,7 @@ def test_sniff_notice_supersedes_mismatch():
     out = _first_turn("prove the theorem, give a full derivation and a lemma",
                       model="z-ai/glm-5.3")
     assert out is not None and "pending" in out["context"].lower()
-    assert "qwen/qwen3.8-max" not in out["context"]
+    assert "qwen/qwen3.8-max-0902" not in out["context"]
 
 
 def test_sniff_notice_not_first_turn():

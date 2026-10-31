@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5] - 2026-10-31
+
+### Changed
+- Pin `evalroute>=0.10.0,<0.11`. Plugin code unchanged. 0.10.0 ships flywheel exploration
+  (opt-in runner-up arm on a fraction of routes, off by default) and the corrected Nous arm
+  ids in the route table. Both bounds move (minor), which is also the floor bump that makes
+  the installed plugin re-resolve the dependency.
+
 ## [0.6.4] - 2026-10-05
 
 ### Changed
