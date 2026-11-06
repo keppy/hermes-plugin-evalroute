@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.6] - 2026-11-06
+
+### Changed
+- Depend on `evalroute[hub]>=0.10.0,<0.11` (was `evalroute>=0.10.0,<0.11`). Plugin code
+  unchanged. A fresh install had no `huggingface_hub`, so `hermes evalroute sync` failed with
+  a hint to `pip install` into a venv, which is not how Hermes manages plugin dependencies
+  (found restoring a new machine, train 2026-10-L). 0.5.0 kept `huggingface_hub` an optional
+  extra so the plugin listed no new dependency; that is reversed here: `sync`, `contribute`
+  and `install-encoder <hub id>` now work on every install, at the cost of installing
+  `huggingface_hub` for everyone. Routing still never imports it.
+- README: the install line names the current pin (it still said `evalroute>=0.8,<0.9`).
+
 ## [0.6.5] - 2026-10-31
 
 ### Changed

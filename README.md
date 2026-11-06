@@ -52,8 +52,9 @@ hermes evalroute install-routes --dry-run   # review, then drop --dry-run
 ```
 
 Installs from the plugin catalog; `pyproject.toml` pulls
-`evalroute>=0.8,<0.9` from PyPI into Hermes's managed environment. No
-credentials, no `requires_env`.
+`evalroute[hub]>=0.10.0,<0.11` from PyPI into Hermes's managed environment
+(the `hub` extra is `huggingface_hub`, which `sync`, `contribute` and
+`install-encoder <hub id>` use). No credentials, no `requires_env`.
 
 ## Why the split
 
