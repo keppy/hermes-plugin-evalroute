@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0] - 2026-11-18
+
+### Changed
+- Depend on `evalroute[hub,decide]>=0.11.0,<0.12`. Plugin code unchanged; the library's CLI tree,
+  which the plugin registers, brings the new verbs. evalroute 0.11.0 adds harness-aware routing
+  (`route --harness`, `harness_arms`, local explore arms, `--no-explore`) and verbs for agent
+  pipelines: local lanes, `record`, `--unit`/`--trace`, `compare` and `diagnose`.
+- The `decide` extra (`gonogo-eval`, which has no dependencies of its own) is in the pin so
+  `hermes evalroute compare` works on every install. Without it, `compare` would print a hint to
+  `pip install` into a venv, which is not how Hermes manages plugin dependencies (the same reason
+  0.6.6 added `hub`).
+
 ## [0.6.6] - 2026-11-06
 
 ### Changed

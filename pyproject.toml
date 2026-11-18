@@ -3,14 +3,15 @@
 # `evalroute` library (PyPI), which brings pyyaml with it, so the plugin
 # declares no dependency of its own beyond the library pin. The `hub` extra
 # (huggingface_hub) makes `sync`, `contribute` and `install-encoder <hub id>` work
-# on a fresh install (0.6.6). Strong rules run
+# on a fresh install (0.6.6); the `decide` extra (gonogo-eval, no dependencies of its own)
+# makes `compare` work (0.7.0). Strong rules run
 # locally inside the library; weak-signal routing invokes ctx.llm (token
 # cost). The separately invoked harness/shim can call paid providers; they
 # do not run on plugin import or as a side effect of installing the plugin.
 
 [project]
 name = "hermes-plugin-evalroute"
-version = "0.6.6"
+version = "0.7.0"
 description = "Hermes plugin: route tasks to the right (model, reasoning effort) arm, from a measured cost-per-verified-success table."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +20,7 @@ authors = [{ name = "James Dominguez" }]
 keywords = ["hermes", "plugin", "model-routing", "evals", "reasoning-effort"]
 
 dependencies = [
-  "evalroute[hub]>=0.10.0,<0.11",
+  "evalroute[hub,decide]>=0.11.0,<0.12",
 ]
 
 [project.optional-dependencies]
